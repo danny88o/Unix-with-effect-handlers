@@ -6,22 +6,25 @@ User Specific Environments
 --------------------------
 */
 
-type user
+pub type user
   Alice
   Bob
   Root
 
-fun show(u: user): string
+fun show(u: user): string // .toString()
   match u
-      Alice -> "alice"
-      Bob -> "bob"
-      Root -> "root"
+    Alice -> "alice"
+    Bob -> "bob"
+    Root -> "root"
 
-effect whoami
+
+effect ask
   fun ask(): string
 
+pub fun whoami(): ask string
+  ask()
 
-fun env(u:user, action: () -> <whoami|e> a): e a 
+pub fun env(u:user, action: () -> <ask|e> a): e a 
   with fun ask() u.show
   action()
 
@@ -29,10 +32,13 @@ fun env(u:user, action: () -> <whoami|e> a): e a
 effect session
   ctl subUser(u: user): ()
 
-pub fun sessionmgr(u: user, action: () -> <session,whoami|e> a): e a
+pub fun switchUser(u: user): session ()
+  subUser(u)
+
+pub fun sessionmgr(u: user, action: () -> <session,ask|e> a): e a
   with env(u)
   with ctl subUser(switch-to)
-    mask<whoami>
+    mask<ask>
       with env(switch-to)
       resume(())
   action()
