@@ -26,8 +26,20 @@ fun test_user()
   switchUser(Alice)
   echo(whoami() ++ " ")
 
+fun test_fork()
+  with basicIO
+  with nondet
+  with sessionmgr(Root)
+  with status
+  if do_fork() then 
+    switchUser(Alice)
+    echo(whoami() ++ " ")
+  else
+    switchUser(Bob)
+    echo(whoami() ++ " ")
 
 fun main()
-  //println(test_io())
-  //println(test_exception())
+  println(test_io())
+  println(test_exception())
   println(test_user())
+  println(test_fork())

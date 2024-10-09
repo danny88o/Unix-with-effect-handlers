@@ -24,7 +24,7 @@ effect ask
 pub fun whoami(): ask string
   ask()
 
-pub fun env(u:user, action: () -> <ask|e> a): e a 
+fun env(u:user, action: () -> <ask|e> a): e a 
   with fun ask() u.show
   action()
 
