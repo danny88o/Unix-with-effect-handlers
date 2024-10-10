@@ -16,7 +16,7 @@ fun test_exception()
   with basicIO
   with status
   echo("dead")
-  do_exit(1)
+  exit(1)
   echo("code")
 
 fun test_user()
@@ -32,7 +32,7 @@ fun test_fork()
   with nondet
   with sessionmgr(Root)
   with status
-  if do_fork() then 
+  if fork() then 
     switchUser(Alice)
     echo(whoami() ++ " ")
   else
@@ -45,7 +45,7 @@ fun test_interruption()
   with interruptWrite
   with sessionmgr(Root)
   with status
-  if do_fork() then 
+  if fork() then 
     switchUser(Alice)
     echo(whoami() ++ "| ")
     echo("A long, long time ago ")

@@ -7,10 +7,7 @@ Processes
 ---------
 */
 
-effect ctl fork(): bool
-
-pub fun do_fork(): fork bool
-  fork()
+pub effect ctl fork(): bool
 
 pub fun nondet(action: () -> <fork|e> a): e list<a>
   with handler
@@ -19,11 +16,7 @@ pub fun nondet(action: () -> <fork|e> a): e list<a>
   action()
 
 
-effect ctl interrupt():()
-
-fun do_interrupt(): interrupt ()
-  interrupt()
-
+pub effect ctl interrupt():()
 
 type pState<a,e>
   Done(ret: a)
