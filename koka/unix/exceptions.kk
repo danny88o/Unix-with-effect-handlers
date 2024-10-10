@@ -6,13 +6,12 @@ Exceptions
 ----------
 */ 
 
-effect status
-  ctl exit(code: int): ()
+effect ctl exit(code: int): ()
 
-pub fun do_exit(c: int): status ()
+pub fun do_exit(c: int): exit ()
   exit(c)
 
-pub fun status(action: () -> <status|e> a ): e int
+pub fun status(action: () -> <exit|e> a ): e int
   with handler
     ctl exit(code) code
   action()

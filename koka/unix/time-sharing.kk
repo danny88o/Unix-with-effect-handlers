@@ -7,8 +7,7 @@ Processes
 ---------
 */
 
-effect fork
-  ctl fork(): bool
+effect ctl fork(): bool
 
 pub fun do_fork(): fork bool
   fork()
@@ -20,8 +19,7 @@ pub fun nondet(action: () -> <fork|e> a): e list<a>
   action()
 
 
-effect interrupt
-  ctl interrupt():()
+effect ctl interrupt():()
 
 fun do_interrupt(): interrupt ()
   interrupt()
@@ -49,8 +47,7 @@ pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
   schedule([Paused(fn () reifyProcess(action))])
 
 pub fun interruptWrite(action: () -> <bio,interrupt|e> a): <bio,interrupt|e> a
-  with fun write(fd,s)
+  with override fun write(fd,s)
     interrupt()
     write(fd,s)
-  mask<bio>
-    action()
+  action()
