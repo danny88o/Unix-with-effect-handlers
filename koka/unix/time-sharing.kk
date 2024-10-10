@@ -1,5 +1,6 @@
 module time-sharing
 
+import io
 /*
 ---------
 Processes
@@ -25,27 +26,31 @@ effect interrupt
 fun do_interrupt(): interrupt ()
   interrupt()
 
+
 type pState<a,e>
   Done(ret: a)
   Paused(remaction: () -> e pState<a,e>)
-
-type action<specific,general>
-  Action
 
 pub fun reifyProcess(action: () -> <interrupt|e> a): e pState<a,e>
   with raw ctl interrupt() 
       Paused(fn() rcontext.resume(()))
   Done(action())
 
-pub fun schedule<a>(actions: list<pState<a,e>>): e list<a>
-  var done := []
-  fun sched(ax: list<pState<a,e>>): e list<a>
-    match ax
+pub fun schedule(jobs: list<pState<a,<fork,div|e>>>): <div|e> list<a>
+  fun sched(ps: list<pState<a,<fork,div|e>>>, done: list<a>): <div|e> list<a>
+    match ps
       Nil -> done
       Cons(x,xs) -> match x
-        Done(ret) -> {
-          done := done ++ [ret]
-          sched(xs)
-        }
-        Paused(action) -> sched(xs ++ nondet(action)) 
-  sched(actions)
+        Done(ret) -> sched(xs, done ++ [ret])
+        Paused(action) -> sched(xs ++ nondet(action), done) 
+  sched(jobs, [])
+
+pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
+  schedule([Paused(fn () reifyProcess(action))])
+
+pub fun interruptWrite(action: () -> <bio,interrupt|e> a): <bio,interrupt|e> a
+  with fun write(fd,s)
+    interrupt()
+    write(fd,s)
+  mask<bio>
+    action()

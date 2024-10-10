@@ -6,9 +6,9 @@ File System
 -----------
 */
 
-alias fileDesc = int;
+pub alias fileDesc = int;
 
-effect bio 
+pub effect bio 
   fun write(fileDesc: fileDesc, fileContent: string): ()
 
 
