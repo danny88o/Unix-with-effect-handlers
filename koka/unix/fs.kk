@@ -109,13 +109,31 @@ fun has(l:list<(k,v)>, key:k, ?(==): (k,k) -> bool): bool
   l.lookup(key)
   True
   
-// fun fcreate(fname:string, fs: fileSystem):fail (int,fileSystem)
-//   if fs.dir.has(fname) then
-//     val ino = fopen(fname, fs)
-//     val inode = fs.ilist.lookup(ino)
-//     val dreg = fs.dreg.modify(inode.loc, "")
-//     (ino, fs(dreg=dreg))
-//   else
-//     val dreg = fs.dreg ++ [(fs.inext, "")]
-//     ()  
+fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
+  if fs.dir.has(fname) then
+    val ino = fopen(fname, fs)
+    val inode = fs.ilist.lookup(ino)
+    val dreg = fs.dreg.modify(inode.loc, "")
+    (ino, fs(dreg=dreg))
+  else
+    val loc = fs.dnext
+    val dreg = [(loc, "")] ++ fs.dreg
+    val ino = fs.inext
+    val inode = Inode(loc, 1)
+    val ilist = [(ino, inode)] ++ fs.ilist
+    val dir = [(fname, ino)] ++ fs.dir
+    (ino, FileSystem(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1 ))
+
+fun fileCreateOpen(action: () -> <fileCO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+  with handler
+    fun create(fname)
+      with withDefault(Nothing)
+      val (ino, fs) = fcreate(fname, get())
+      put(fs)
+      Just(ino)
+    fun open(fname)
+      with withDefault(Nothing)
+      Just(fopen(fname, get()))
+  action()
+
 
