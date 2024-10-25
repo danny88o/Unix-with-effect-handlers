@@ -1,6 +1,5 @@
 module fs
 
-
 /*
 --------------
 Handling State
@@ -25,9 +24,8 @@ pub fun runState(init:a, action: () -> <cell<a>,div|e> a): <div|e> (a,a)
 Storage Medium
 --------------
 */
-
-alias directory = list<(string, int)>
 value struct inode{lno:int; loc:int}
+alias directory = list<(string, int)>
 alias dataRegion = list<(int,string)>
 alias iList = list<(int,inode)>
 
@@ -97,9 +95,8 @@ File creation and opening
 -------------------------
 */
 
-effect fileCO
-  fun create(fname: string): maybe<int>
-  fun open(fname: string): maybe<int>
+pub effect fun createFile(fname: string): maybe<int>
+pub effect fun openFile(fname: string): maybe<int>
 
 fun fopen(fname:string, fs:fileSystem): fail int
   fs.dir.lookup(fname)
@@ -122,18 +119,15 @@ fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
     val inode = Inode(loc, 1)
     val ilist = [(ino, inode)] ++ fs.ilist
     val dir = [(fname, ino)] ++ fs.dir
-    (ino, FileSystem(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1 ))
+    (ino, fs(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1 ))
 
-fun fileCreateOpen(action: () -> <fileCO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
-  with handler
-    fun create(fname)
-      with withDefault(Nothing)
-      val (ino, fs) = fcreate(fname, get())
-      put(fs)
-      Just(ino)
-    fun open(fname)
-      with withDefault(Nothing)
-      Just(fopen(fname, get()))
+fun fileCreateOpen(action: () -> <createFile, openFile, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+  with fun createFile(fname)
+    with withDefault(Nothing)
+    val (ino, fs) = fcreate(fname, get())
+    put(fs)
+    Just(ino)
+  with fun openFile(fname)
+    with withDefault(Nothing)
+    Just(fopen(fname, get()))
   action()
-
-
