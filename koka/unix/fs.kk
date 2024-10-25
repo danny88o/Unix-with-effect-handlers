@@ -77,16 +77,16 @@ fun withDefault(default:a, action: () -> <fail|e> a): e a
   with ctl fail() default
   action()
 
-fun fileRW(action: () -> <fileIO,cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+fun fileRW(action: () -> <fileIO|e> a): <cell<fileSystem>|e> a
   with handler
     fun read(inum:int)
       with withDefault(Nothing)
       Just(fread(inum,get()))
-
     fun write(inum:int, content:string)
       with withDefault(())
       put(fwrite(inum, get(), content))
 
+  with mask<cell<fileSystem>>
   action() 
 
 /*
@@ -121,7 +121,7 @@ fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
     val dir = [(fname, ino)] ++ fs.dir
     (ino, fs(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1 ))
 
-fun fileCreateOpen(action: () -> <createFile, openFile, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+fun fileCreateOpen(action: () -> <createFile, openFile|e> a): <cell<fileSystem>|e> a
   with fun createFile(fname)
     with withDefault(Nothing)
     val (ino, fs) = fcreate(fname, get())
@@ -130,4 +130,6 @@ fun fileCreateOpen(action: () -> <createFile, openFile, cell<fileSystem>|e> a): 
   with fun openFile(fname)
     with withDefault(Nothing)
     Just(fopen(fname, get()))
+
+  with mask<cell<fileSystem>>
   action()
