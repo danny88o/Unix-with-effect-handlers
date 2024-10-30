@@ -1,7 +1,7 @@
-module file-rw
+module fs/file-rw
 
-import state
-import fail
+import fs/state
+import fs/fail
 
 import io
 
@@ -15,11 +15,11 @@ File reading and writing
 effect fun read(inum:int): maybe<string>
 
 fun fread(ino:int, fs:fileSystem): fail string 
-  fs.dreg.lookup(fs.ilist.lookup(ino).loc)
+  fs.dreg.lookup-fail(fs.ilist.lookup-fail(ino).loc)
 
 fun fwrite(ino:int, fs:fileSystem, content:string): fail fileSystem
-  val loc = fs.ilist.lookup(ino).loc
-  val file = fs.dreg.lookup(loc)
+  val loc = fs.ilist.lookup-fail(ino).loc
+  val file = fs.dreg.lookup-fail(loc)
   val dreg = fs.dreg.modify(loc, file) 
   fs(dreg=dreg)
 
@@ -31,4 +31,4 @@ pub fun fileRW(action: () -> <read, io/write, cell<fileSystem>|e> a): <cell<file
     with withDefault(())
     put(fwrite(inum, get(), content))
 
-  action() 
+  action()

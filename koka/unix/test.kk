@@ -4,7 +4,12 @@ import io
 import exceptions
 import time-sharing
 import users
-import time-sharing
+
+import fs/fail
+import fs/file-oc
+import fs/file-rw
+import fs/stream-redirection
+import fs/state
 
 fun test_io()
   with basicIO
@@ -39,6 +44,14 @@ fun test_fork()
     switchUser(Bob)
     echo(whoami() ++ " ")
 
+fun star-wars()
+  echo("A long, long time ago ")
+  echo("in a galaxy far, far away ")
+
+fun jar-jar()
+  echo("Mesa culled Jar Jar Binks ")
+  echo("Mesa your humble servant ")
+
 fun test_interruption()
   with basicIO
   with timeshare
@@ -48,13 +61,27 @@ fun test_interruption()
   if fork() then 
     switchUser(Alice)
     echo(whoami() ++ "| ")
-    echo("A long, long time ago ")
-    echo("in a galaxy far, far away ")
+    star-wars()
   else
     switchUser(Bob)
     echo(whoami() ++ "| ")
-    echo("Mesa culled Jar Jar Binks ")
-    echo("Mesa your humble servant ")
+    jar-jar()
+
+fun test_stream-redirection()
+  with runState(FileSystem())
+  with fileRW
+  with fileCO
+  with timeshare
+  with interruptWrite
+  with sessionmgr(Root)
+  with status
+  if fork() then
+    switchUser(Alice)
+    star-wars > "title-creds.txt"
+  else 
+    switchUser(Bob)
+    jar-jar > "sith"
+
 
 fun main()
   println(test_io())
@@ -62,3 +89,6 @@ fun main()
   println(test_user())
   println(test_fork())
   println(test_interruption())
+  val (fs, code) = test_stream-redirection()
+  println("Exit Code: " ++ code.show)
+  reveal(fs)

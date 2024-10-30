@@ -1,4 +1,4 @@
-module state
+module fs/state
 
 /*
 --------------
@@ -10,7 +10,7 @@ pub effect cell<a>
   fun get(): a
   fun put(a:a): ()
 
-pub fun runState(init:a, action: () -> <div,cell<a>|e> b): <div|e> (a,b)
+pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> (b,a)
   var curr := init
   with handler
     return(x)   (curr,x)

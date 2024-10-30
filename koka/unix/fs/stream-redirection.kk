@@ -1,15 +1,12 @@
-module stream-redirection
+module fs/stream-redirection
 
 import io
 import exceptions
-import fs
+import fs/file-oc
 
-pub fun (>)(action: () -> <io/write|e> a, fname: string): <io/write,create,exit|e> a
-  with fun io/write(fileDesc, fileContent)
+pub fun (>)(action: () -> <io/write, create, exit|e> a, fname: string): <io/write,create,exit|e> a
+  with override fun io/write(fileDesc, fileContent)
     match create(fname) 
       Nothing   -> exit(1)
       Just(ino) -> io/write(ino, fileContent)
-  with mask<exit>
-  with mask<create>
-  with mask<io/write>
   action()

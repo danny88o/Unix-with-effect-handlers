@@ -1,29 +1,30 @@
-module file-oc
-
-import state
-import fail
-
 /*
 -------------------------
 File creation and opening
 -------------------------
 */
 
+module fs/file-oc
+
+import fs/state
+import fs/fail
+
+
 pub effect fun create(fname: string): maybe<int>
 pub effect fun open(fname: string): maybe<int>
 
 fun fopen(fname:string, fs:fileSystem): fail int
-  fs.dir.lookup(fname)
+  fs.dir.lookup-fail(fname)
 
 fun has(l:list<(k,v)>, key:k, ?(==): (k,k) -> bool): bool
   with withDefault(False)
-  l.lookup(key)
+  l.lookup-fail(key)
   True
   
 fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
   if fs.dir.has(fname) then
     val ino = fopen(fname, fs)
-    val inode = fs.ilist.lookup(ino)
+    val inode = fs.ilist.lookup-fail(ino)
     val dreg = fs.dreg.modify(inode.loc, "")
     (ino, fs(dreg=dreg))
   else
@@ -44,6 +45,5 @@ pub fun fileCO(action: () -> <create, open|e> a): <cell<fileSystem>|e> a
   with fun open(fname)
     with withDefault(Nothing)
     Just(fopen(fname, get()))
-
   with mask<cell<fileSystem>>
   action()
