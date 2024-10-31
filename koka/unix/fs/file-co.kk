@@ -4,7 +4,7 @@ File creation and opening
 -------------------------
 */
 
-module fs/file-oc
+module fs/file-co
 
 import fs/state
 import fs/fail
@@ -16,10 +16,6 @@ pub effect fun open(fname: string): maybe<int>
 fun fopen(fname:string, fs:fileSystem): fail int
   fs.dir.lookup-fail(fname)
 
-fun has(l:list<(k,v)>, key:k, ?(==): (k,k) -> bool): bool
-  with withDefault(False)
-  l.lookup-fail(key)
-  True
   
 fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
   if fs.dir.has(fname) then
@@ -36,7 +32,7 @@ fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
     val dir = [(fname, ino)] ++ fs.dir
     (ino, fs(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1))
 
-pub fun fileCO(action: () -> <create, open|e> a): <cell<fileSystem>|e> a
+pub fun fileCO(action: () -> <create, open, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fun create(fname)
     with withDefault(Nothing)
     val (ino, fs) = fcreate(fname, get())
@@ -45,5 +41,4 @@ pub fun fileCO(action: () -> <create, open|e> a): <cell<fileSystem>|e> a
   with fun open(fname)
     with withDefault(Nothing)
     Just(fopen(fname, get()))
-  with mask<cell<fileSystem>>
   action()

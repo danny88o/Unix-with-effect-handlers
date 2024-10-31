@@ -6,8 +6,9 @@ import time-sharing
 import users
 
 import fs/fail
-import fs/file-oc
+import fs/file-co
 import fs/file-rw
+import fs/file-io
 import fs/stream-redirection
 import fs/state
 
@@ -82,6 +83,23 @@ fun test_stream-redirection()
     switchUser(Bob)
     jar-jar > "sith"
 
+fun test_fs()
+  with runState(FileSystem())
+  with timeshare
+  with fileIO
+  with interruptWrite
+  with sessionmgr(Root)
+  with status
+  if fork() then
+    switchUser(Alice)
+    star-wars > "title-creds.txt"
+    cp(False,  "title-creds.txt", "ritchie")
+    rm("ritchie.txt")
+  else 
+    switchUser(Bob)
+    jar-jar > "sith"
+    cp(True, "sith", "act3")
+
 
 fun main()
   println(test_io())
@@ -92,3 +110,10 @@ fun main()
   val (fs, code) = test_stream-redirection()
   println("Exit Code: " ++ code.show)
   reveal(fs)
+  println("\n")
+  val (fs2, code2) = test_fs()
+  println("Exit Code: " ++ code2.show)
+  reveal(fs2)
+  println("\n")
+
+

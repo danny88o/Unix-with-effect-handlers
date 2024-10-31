@@ -2,7 +2,7 @@ module fs/stream-redirection
 
 import io
 import exceptions
-import fs/file-oc
+import fs/file-co
 
 pub fun (>)(action: () -> <io/write, create, exit|e> a, fname: string): <io/write,create,exit|e> a
   with override fun io/write(fileDesc, fileContent)

@@ -12,7 +12,7 @@ File reading and writing
 */
 
 // write effect is defined in io
-effect fun read(inum:int): maybe<string>
+pub effect fun read(inum:int): maybe<string>
 
 fun fread(ino:int, fs:fileSystem): fail string 
   fs.dreg.lookup-fail(fs.ilist.lookup-fail(ino).loc)
