@@ -6,15 +6,11 @@ Storage Medium
 --------------
 */
 pub value struct inode{lno:int; loc:int}
-alias directory = list<(string, int)>
-alias dataRegion = list<(int,string)>
-alias iList = list<(int,inode)>
-
 
 pub struct fileSystem
-  dir: directory = [("stdout", 0)];
-  ilist:iList = [(0,Inode(lno=0,loc=0))];
-  dreg: dataRegion = [(0,"")];
+  dir: list<(string, int)> = [("stdout", 0)];
+  ilist:list<(int,inode)> = [(0,Inode(lno=0,loc=0))];
+  dreg: list<(int,string)> = [(0,"")];
   dnext: int = 1;
   inext: int = 1
 

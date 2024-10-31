@@ -15,10 +15,10 @@ fun test_stream-redirection()
   with status
   if fork() then
     switchUser(Alice)
-    star-wars > "title-creds.txt"
+    unix > "ritchie.txt"
   else 
     switchUser(Bob)
-    jar-jar > "sith"
+    hamlet > "hamlet"
 
 fun test_fs()
   with runState(FileSystem())
@@ -27,15 +27,16 @@ fun test_fs()
   with interruptWrite
   with sessionmgr(Root)
   with status
+  
   if fork() then
     switchUser(Alice)
-    star-wars > "title-creds.txt"
-    cp(False,  "title-creds.txt", "ritchie")
+    unix > "ritchie.txt"
+    cp(False,  "ritchie.txt", "ritchie")
     rm("ritchie.txt")
   else 
     switchUser(Bob)
-    jar-jar > "sith"
-    cp(True, "sith", "act3")
+    hamlet > "hamlet"
+    cp(True, "hamlet", "act3")
 
 fun main()
   println(test_stream-redirection())

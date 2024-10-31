@@ -16,20 +16,21 @@ File reading and writing
 pub effect fun read(inum:int): maybe<string>
 
 fun fread(ino:int, fs:fileSystem): fail string 
-  fs.dreg.lookup-fail(fs.ilist.lookup-fail(ino).loc)
+  val inode = fs.ilist.lookup-fail(ino)
+  fs.dreg.lookup-fail(inode.loc)
 
-fun fwrite(ino:int, fs:fileSystem, content:string): fail fileSystem
+fun fwrite(ino:int, cs:string, fs:fileSystem): fail fileSystem
   val loc = fs.ilist.lookup-fail(ino).loc
   val file = fs.dreg.lookup-fail(loc)
-  val dreg = fs.dreg.modify(loc, file) 
+  val dreg = fs.dreg.modify(loc, file++cs) 
   fs(dreg=dreg)
 
 pub fun fileRW(action: () -> <read, io/write, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
-  with fun read(inum:int)
+  with fun read(ino)
     with withDefault(Nothing)
-    Just(fread(inum,get()))
-  with fun write(inum:int, content:string)
+    Just(fread(ino,get()))
+  with fun write(ino, cs)
     with withDefault(())
-    put(fwrite(inum, get(), content))
+    put(fwrite(ino, cs, get()))
 
   action()

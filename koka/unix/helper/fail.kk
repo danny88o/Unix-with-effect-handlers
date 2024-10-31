@@ -25,7 +25,7 @@ pub fun has(l:list<(k,v)>, key:k, ?(==): (k,k) -> bool): bool
   l.lookup-fail(key)
   True
 
-pub fun remove<k>(l: list<(k, v)>, key: k, ?(==): (k,k) -> bool): list<(k, v)>
+pub fun remove(l: list<(k, v)>, key: k, ?(==): (k,k) -> bool): list<(k, v)>
   match l
     Nil -> Nil
     Cons((k,v), xs) -> if k==key then xs else Cons((k,v), xs.remove(key))
