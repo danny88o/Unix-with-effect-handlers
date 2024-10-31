@@ -6,8 +6,9 @@ File creation and opening
 
 module fs/file-co
 
-import fs/state
-import fs/fail
+import helper/fail
+import helper/state
+import fs/storage
 
 
 pub effect fun create(fname: string): maybe<int>

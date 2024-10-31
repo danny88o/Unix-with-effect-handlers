@@ -1,4 +1,4 @@
-module fs/fail
+module helper/fail
 
 /*
 Failure effect and its general use

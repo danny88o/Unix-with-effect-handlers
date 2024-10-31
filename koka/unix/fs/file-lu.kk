@@ -1,7 +1,8 @@
 module fs/file-lu
 
-import fs/state
-import fs/fail
+import helper/fail
+import helper/state
+import fs/storage
 
 pub effect fun link(src: string, dest: string): ()
 pub effect fun unlink(fname: string): ()

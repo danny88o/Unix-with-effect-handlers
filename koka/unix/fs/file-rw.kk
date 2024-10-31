@@ -1,9 +1,10 @@
 module fs/file-rw
 
-import fs/state
-import fs/fail
+import helper/fail
+import helper/state
+import fs/storage
 
-import io
+pub import io
 
 /*
 ------------------------

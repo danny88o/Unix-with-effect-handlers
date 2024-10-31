@@ -1,13 +1,13 @@
 module fs/file-io
 
-import io
-import fs/state
+import helper/state
+import fs/storage
 import fs/file-rw
 import fs/file-co
 import fs/file-lu
 import fs/stream-redirection
 
-import exceptions
+import basic/exceptions
 
 
 pub fun fileIO(action: () -> <io/write, fs/file-rw/read, open, create, link, unlink, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
