@@ -2,15 +2,16 @@ module fs/file-io
 
 import helper/state
 import fs/storage
-import fs/file-rw
-import fs/file-co
-import fs/file-lu
+pub import fs/file-rw
+pub import fs/file-co
+pub import fs/file-lu
 import fs/stream-redirection
 
 import basic/exceptions
 
+pub alias fileIO = <io/write, fs/file-rw/read, open, create, link, unlink>
 
-pub fun fileIO(action: () -> <io/write, fs/file-rw/read, open, create, link, unlink, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+pub fun fileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fileRW
   with fileCO
   with fileLU
