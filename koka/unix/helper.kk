@@ -1,7 +1,5 @@
-module helper/fail
-
 /*
-Failure effect and its general use
+Deafult effect and/with methods on lists
 */
 
 pub effect ctl fail(): a
@@ -29,3 +27,18 @@ pub fun remove(l: list<(k, v)>, key: k, ?(==): (k,k) -> bool): list<(k, v)>
   match l
     Nil -> Nil
     Cons((k,v), xs) -> if k==key then xs else Cons((k,v), xs.remove(key))
+
+pub fun iter(xs: list<a>, f: a -> e b): e ()
+  xs.map(f)
+  ()
+
+pub fun alt/iter(ys:c, f: a -> e b, ?list: c -> list<a>): e ()
+  ys.list.map(f)
+  ()
+
+pub fun concat(xs: list<string>): string
+  match xs
+    Nil -> ""
+    Cons(s, ss) -> s ++ concat(ss)
+
+

@@ -1,5 +1,122 @@
 module basic
 
-pub import basic/exceptions
-pub import basic/time-sharing
-pub import basic/users
+/* 
+-----------
+Basic IO
+-----------
+*/
+
+pub alias fileDesc = int;
+
+pub effect fun write(fileDesc: fileDesc, fileContent: string): ()
+
+
+pub fun basicIO(action : () -> <write|e> a ) : e (a,string)
+  var buffer: string := ""
+  with handler
+    return(x) (x,buffer)
+    fun write(fd,s) buffer := buffer ++ s
+  action()
+
+pub fun echo(cs: string): write ()
+  val stdOut: fileDesc = 0;
+  write(stdOut,cs)
+
+/* 
+----------
+Exceptions
+----------
+*/ 
+
+pub effect ctl exit(code: int): ()
+
+pub fun status(action: () -> <exit|e> a ): e int
+  with ctl exit(code) code
+  action()
+  0
+
+/*
+---------
+Processes
+---------
+*/
+
+pub effect ctl fork(): bool
+
+pub fun nondet(action: () -> <fork|e> a): e list<a>
+  with handler
+    return(x) [x]
+    ctl fork() resume(True) ++ resume(False)
+  action()
+
+
+pub effect ctl interrupt():()
+
+type pState<a,e>
+  Done(ret: a)
+  Paused(remaction: () -> e pState<a,e>)
+
+fun reifyProcess(action: () -> <interrupt|e> a): e pState<a,e>
+  with raw ctl interrupt() 
+      Paused(fn() rcontext.resume(()))
+  Done(action())
+
+pub fun schedule(jobs: list<pState<a,<fork, div|e>>>): <div|e> list<a>
+  fun sched(ps: list<pState<a,<fork,div|e>>>, done: list<a>): <div|e> list<a>
+    match ps
+      Nil -> done
+      Cons(Done(ret),xs) -> sched(xs, done ++ [ret])
+      Cons(Paused(action), xs) -> sched(xs ++ nondet(action), done) 
+  sched(jobs, [])
+
+pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
+  schedule([Paused(fn () reifyProcess(action))])
+
+pub fun interruptWrite(action: () -> <interrupt, write|e> a): <interrupt, write|e> a
+  with override fun write(fd,s)
+    interrupt()
+    write(fd,s)
+    
+  action()
+
+
+/*
+--------------------------
+User Specific Environments
+--------------------------
+*/
+
+pub type user
+  Alice
+  Bob
+  Root
+
+fun show(u: user): string // .toString()
+  match u
+    Alice -> "alice"
+    Bob -> "bob"
+    Root -> "root"
+
+
+effect fun ask(): string
+
+pub fun whoami(): ask string
+  ask()
+
+fun env(u:user, action: () -> <ask|e> a): e a 
+  with fun ask() u.show
+  action()
+
+
+effect ctl subUser(u: user): ()
+
+pub fun switchUser(u: user): subUser ()
+  subUser(u)
+
+pub fun sessionmgr(u: user, action: () -> <subUser,ask|e> a): e a
+  with env(u)
+  with ctl subUser(switch-to)
+    mask<ask>
+      with env(switch-to)
+      resume(())
+  action()
