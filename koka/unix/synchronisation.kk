@@ -9,53 +9,78 @@ pub effect co
   ctl uInterrupt(): ()
 //pub alias co = <uFork, wait, interrupt>
 
-abstract type ix
+alias proc<a,e> = stateS<a,e> -> e list<(int,a)>
 
-alias proc<a> = stateS<a> -> list<(int,a)>
+rec type stateP<a,e>
+  Blocked(pid:int, res:proc<a,e>)
+  Ready(res: proc<a,e>)
 
-rec type stateP<a>
-  Blocked(pid:int, res:proc<a>)
-  Ready(res: proc<a>)
+struct stateS<a,e> (
+  q:list<(int,stateP<a,e>)> = [], 
+  done:list<(int,a)> = [], 
+  pid:int = 0, 
+  pnext:int = 1
+)
 
-struct stateS<a>(q:list<(int,stateP<a>)>, done:list<(int,a)>, pid:int, pnext:int)
-
-fun runNext(st: stateS<a>): div list<(int,a)>
+fun runNext(st: stateS<a,<div|e>>): <div|e> list<(int,a)>
   match st.q
     Nil -> st.done
-    Cons((pid, p), q') -> match p
-      Blocked  -> runNext(st(q = q' ++ [(pid, p)])) // Push to back of queue
-      Ready(res) -> res(st(q = q', pid=pid))
+    Cons((pid, Blocked(pid',res)), q') -> 
+        if q'.has(pid') 
+        then
+          runNext(st(q= q'++[(pid,Blocked(pid',res))])) // Push to back of queue
+        else res(st(q=q', pid=pid))
+    Cons((pid, Ready(res)), q') -> 
+      val st' = st(q=q', pid=pid)
+      res(st')
 
 
-fun sched(st:stateS<a>, action:() -> <co|e> a): <div|e> list<(int,a)>
-  with handler
-    return(x) 
-      val done' = [(st.pid, x)] ++ st.done
-      runNext(st(done=done'))
-    raw ctl uFork()
-      val resume' = fn(st') rcontext.resume(0)
-      val pid = st.pnext
-      val q' = st.q ++ [(pid, Ready(resume'))]
-      with sched(st(q=q', pnext = pid+1))
-      rcontext.resume(pid)
-    raw ctl wait(pid)
-      val resume' = fn(st') rcontext.resume(())
-      val q' = if st.q.has(pid) then st.q ++ [(st.pid, Blocked(pid, resume'))] else st.q ++ [(st.pid, Ready(resume'))]
-      runNext(st(q=q'))
-    raw ctl uInterrupt()
-      val resume' = fn(st') rcontext.resume(st')
-      val q' = st.q ++ [(st.pid, Ready(resume'))]
-      runNext(st(q=q'))
+pub fun sched(st:stateS<a,<div|e>>, action:() -> <co,div|e> a): <div|e> list<(int,a)>
+  val res = 
+    with handler
+      return(x)
+        fn(st){
+          val done' = [(st.pid, x)] ++ st.done
+          runNext(st(done=done'))
+        }
+      ctl uFork()
+        fn(st){
+          val resume' = fn(st') resume(0)(st')
+          val pid = st.pnext
+          val q' = st.q ++ [(pid, Ready(resume'))]
+          resume(pid)(st(q=q', pnext=pid+1))
+        }
+      ctl wait(pid')
+        fn(st){
+          val resume' = fn(st') resume(())(st')
+          val q' = if st.q.has(pid') 
+            then st.q ++ [(st.pid, Blocked(pid', resume'))] 
+            else st.q ++ [(st.pid, Ready(resume'))]
+          runNext(st(q=q'))
+        }
+      ctl uInterrupt()
+        fn(st){
+          val resume' = fn(st') resume(())(st')
+          val q' = st.q ++ [(st.pid, Ready(resume'))]
+          runNext(st(q=q'))
+        }
+    action()
+  res(st)
+
+
+pub fun init(main: () -> <co,console|e> ()): <co, console|e> ()
+  val pid = uFork()
+  println("Post Main fork")
+  if pid == 0
+  then 
+    println("Main Begin " ++ pid.show)
+    main()
+    println("Main Finished") 
+  else 
+    println("Pre-Clean " ++ pid.show)
+    wait(pid)
+    println("Cleanup")
+
+pub fun timeshare2(action: () -> <co,div|e> a): <div|e> list<(int,a)>
+  with sched(StateS())
   action()
-
-
-
-
-// val state-param = handler(s) 
-//   return x -> (x,s)
-//   get()    -> resume(s,s)
-//   put(s')  -> resume((),s')
-
-// fun toProc(res): proc<a>
-//   fn(st:stateS<a>) 
-

@@ -3,22 +3,26 @@ module tests
 import basic
 import fs
 import pipe
+import synchronisation
 
 fun main()
-  println("\n\nBasic Tests:")
-  println(test_io())
-  println(test_exception())
-  println(test_user())
-  println(test_fork())
-  println(test_interruption())
+  // println("\n\nBasic Tests:")
+  // println(test_io())
+  // println(test_exception())
+  // println(test_user())
+  // println(test_fork())
+  // println(test_interruption())
 
-  println("\n\nfs: ")
-  println(test_stream-redirection())
-  println("")
-  println(test_fs())
+  // println("\n\nfs: ")
+  // println(test_stream-redirection())
+  // println("")
+  // println(test_fs())
 
-  println("\n\nUtils: ")
-  println(test_utils())
+  // println("\n\nUtils: ")
+  // println(test_utils())
+
+  println("\n\nSynchronisation")
+  println(test_sync())
 
 
 /*
@@ -113,9 +117,7 @@ fun test_fs()
 
 
 /*
-----------------------------------------------------------------
 Test Pipe
-----------------------------------------------------------------
 */
 
 fun test_utils()
@@ -133,6 +135,29 @@ fun test_utils()
   hamlet > "hamlet"
   p > "analysis"
 
+/*
+Synchronisation
+*/
+
+fun test_sync()
+  with runState(FileSystem())
+  with fileIO
+  with timeshare2
+  with sessionmgr(Root)
+  with status
+  with init
+  // val pid = uFork()
+  // if pid == 0
+  // then {
+  //   switchUser(Alice)
+  //   unix()  
+  // }
+  // else {
+  //   switchUser(Bob)
+  //   wait(pid)
+  //   hamlet()
+  // }
+  ()
 /*
 Helper functions for tests
 */
