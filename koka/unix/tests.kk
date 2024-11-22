@@ -146,18 +146,18 @@ fun test_sync()
   with sessionmgr(Root)
   with status
   with init
-  // val pid = uFork()
-  // if pid == 0
-  // then {
-  //   switchUser(Alice)
-  //   unix()  
-  // }
-  // else {
-  //   switchUser(Bob)
-  //   wait(pid)
-  //   hamlet()
-  // }
-  ()
+  val pid = uFork()
+  if pid == 0
+  then {
+    switchUser(Alice)
+    unix()  
+  }
+  else {
+    switchUser(Bob)
+    wait(pid)
+    hamlet()
+  }
+
 /*
 Helper functions for tests
 */

@@ -18,18 +18,17 @@ rec type stateP<a,e>
 struct stateS<a,e> (
   q:list<(int,stateP<a,e>)> = [], 
   done:list<(int,a)> = [], 
-  pid:int = 0, 
-  pnext:int = 1
+  pid:int = 1, 
+  pnext:int = 2
 )
 
 fun runNext(st: stateS<a,<div|e>>): <div|e> list<(int,a)>
   match st.q
     Nil -> st.done
     Cons((pid, Blocked(pid',res)), q') -> 
-        if q'.has(pid') 
-        then
-          runNext(st(q= q'++[(pid,Blocked(pid',res))])) // Push to back of queue
-        else res(st(q=q', pid=pid))
+        if st.done.has(pid') 
+        then res(st(q=q', pid=pid))
+        else runNext(st(q= q'++[(pid,Blocked(pid',res))])) // Push to back of queue
     Cons((pid, Ready(res)), q') -> 
       val st' = st(q=q', pid=pid)
       res(st')
@@ -68,18 +67,13 @@ pub fun sched(st:stateS<a,<div|e>>, action:() -> <co,div|e> a): <div|e> list<(in
   res(st)
 
 
-pub fun init(main: () -> <co,console|e> ()): <co, console|e> ()
+pub fun init(main: () -> <co|e> ()): <co|e> ()
   val pid = uFork()
-  println("Post Main fork")
   if pid == 0
   then 
-    println("Main Begin " ++ pid.show)
     main()
-    println("Main Finished") 
   else 
-    println("Pre-Clean " ++ pid.show)
     wait(pid)
-    println("Cleanup")
 
 pub fun timeshare2(action: () -> <co,div|e> a): <div|e> list<(int,a)>
   with sched(StateS())

@@ -41,4 +41,9 @@ pub fun concat(xs: list<string>): string
     Nil -> ""
     Cons(s, ss) -> s ++ concat(ss)
 
+pub fun keys(xs: list<(int, v)>): list<int>
+  match xs
+    Nil -> Nil
+    Cons((k,_), ps) -> Cons(k, ps.keys)
+
 
