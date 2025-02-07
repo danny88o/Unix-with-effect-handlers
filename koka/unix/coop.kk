@@ -11,16 +11,16 @@ pub effect coop<a>
   fun spawn(f: () -> ()): ()
   // ctl wait(pid: int): a
 
-alias proc<a,e> = () -> e list<(int,a)>
+alias proc<a,e> = () -> ()
 
 type stateP<a,e>
   Blocked(pid:int, res:proc<a,e>)
   Ready(res: proc<a,e>)
 
 struct stateS<a,e> (
-  q:list<(int,stateP<a,e>)> = [], 
-  done:list<(int,a)> = [], 
-  pid:int = 1, 
+  q:list<(int,stateP<a,e>)> = [],
+  done:list<(int,a)> = [],
+  pid:int = 1,
   pnext:int = 2
 )
 
@@ -35,33 +35,32 @@ pub fun multithreading(action:() -> <coop<b>,div|e> a): <div|e> ()
   fun dequeue()
     match state.q
       Nil -> ()
-      Cons((pid, Ready(t)), ts) ->          
+      Cons((pid, Ready(t)), ts) ->
             state := state(q=ts, pid=pid)
-            t
+            t()
       Cons((pid, Blocked(pid', t)), ts) ->
-            if state.done.has(pid') then 
+            if state.done.has(pid') then
               state := state(q=ts, pid=pid)
             else
-              state := state(q=ts ++ [Blocked(pid', t)])
+              state := state(q=ts ++ [(pid, Blocked(pid', t))])
               dequeue()
-  
+
   fun hold(t)
-    val q = state.q ++ [pnext, Ready(t)]
+    val q = state.q ++ [(state.pid, Ready(t))]
     state := state(q=q)
 
   with handler
-    return(x)     
-      val done = state.done ++ [(pid, x)]
+    return(x)
+      val done = state.done ++ [(state.pid, x)]
       state := state(done=done)
       dequeue()
     fun spawn(t)  enqueue(t)
-    ctl yield()  {enqueue(fn() resume(())); dequeue()}
+    ctl yield()  {hold(fn() resume(())); dequeue()}
 
   action()
 
 // pub fun fib(n: int): <coop|e> int
 //   spawn(write(1,"2"))
 //   1
-  
 
-  
+
