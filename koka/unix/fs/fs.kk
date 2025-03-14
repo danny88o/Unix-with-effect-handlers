@@ -1,5 +1,6 @@
 module fs
 
+import basicIO
 import basic
 import helper
 
@@ -54,9 +55,9 @@ File reading and writing
 ------------------------
 */
 
-// write effect is defined in basic/write
+// write effect is defined in basicIO/write
 pub effect fun read(inum:int): maybe<string>
-pub alias fileRW = <basic/write, read>
+pub alias fileRW = <basicIO/write, read>
 
 fun fread(ino:int, fs:fileSystem): fail string 
   val inode = fs.ilist.lookup-fail(ino)
@@ -171,13 +172,13 @@ pub fun fileLU(action: () -> <fileLU, cell<fileSystem>|e> a): <cell<fileSystem>|
 Stream Redirection
 */
 
-pub fun (>)(action: () -> <basic/write, create, exit|e> a, fname: string): <basic/write,create,exit|e> a
+pub fun (>)(action: () -> <basicIO/write, create, exit|e> a, fname: string): <basicIO/write,create,exit|e> a
   val maybe-ino = create(fname)
     
   with override fun write(fileDesc, fileContent)
     match maybe-ino
         Nothing   -> exit(1)
-        Just(ino) -> basic/write(ino, fileContent)
+        Just(ino) -> basicIO/write(ino, fileContent)
     
   action()
 
@@ -188,7 +189,7 @@ FileIO
 --------------------------
 */
 
-pub alias fileIO = <basic/write, read, open, create, link, unlink>
+pub alias fileIO = <basicIO/write, read, open, create, link, unlink>
 
 pub fun fileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fileRW
@@ -197,7 +198,7 @@ pub fun fileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|
   action()
   
 
-pub fun cp(do-link: bool, src:string, dest:string): <basic/write, read, open, create, link, exit> ()
+pub fun cp(do-link: bool, src:string, dest:string): <basicIO/write, read, open, create, link, exit> ()
   if do-link then link(src,dest)
   else match open(src)
     Nothing   -> exit(1)

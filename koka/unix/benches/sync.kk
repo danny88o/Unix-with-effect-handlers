@@ -1,11 +1,24 @@
-module sync/bench
+module benches/sync
 
 import helper
 import sync/co
 import sync/parametrized
-import sync/synchope
+import sync/state
 
 val n = 16
+
+pub fun fib(n: int): <div, co<int>> int
+  match n
+    0 -> 1
+    1 -> 1
+    _ ->
+      val pid1 = uFork()
+      if pid1 == 0 then return fib(n - 1)
+    
+      val pid2 = uFork()
+      if pid2 == 0 then return fib(n - 2)
+ 
+      return extractResult(pid2) + extractResult(pid1)
 
 fun getPid1(action: () -> e list<(int,int)>): e int    
   match action().lookup(fn(x) x == 1)
