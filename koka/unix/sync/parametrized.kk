@@ -1,28 +1,24 @@
-module synchronisation
+module sync/parametrized
 
 import basic
 import helper
+import sync/co
 
-pub effect co<a>
-  ctl uFork(): int
-  ctl wait(pid: int): ()
-  ctl uInterrupt(): ()
-  ctl exitStatus(pid:int): maybe<a>
-  ctl getPid():int
 //pub alias co = <uFork, wait, interrupt>
-
-alias proc<a,e> = stateS<a,e> -> e list<(int,a)>
+alias proc<a,e> = stateS<a,e> -> e list<(int, a)>
 
 div type stateP<a,e>
   Blocked(pid:int, res:proc<a,e>)
   Ready(res: proc<a,e>)
 
 struct stateS<a,e> (
-  q:list<(int,stateP<a,e>)> = [], 
-  done:list<(int,a)> = [], 
-  pid:int = 1, 
-  pnext:int = 2
+  q: list<(int, stateP<a,e>)> = [], 
+  done: list<(int, a)>        = [], 
+  pid: int                    =  1, 
+  pnext: int                  =  2
 )
+
+
 
 fun runNext(st: stateS<a,<div|e>>): <div|e> list<(int,a)>
   match st.q
@@ -36,7 +32,7 @@ fun runNext(st: stateS<a,<div|e>>): <div|e> list<(int,a)>
       res(st')
 
 
-pub fun sched(st:stateS<a,<div|e>>, action:() -> <co<a>,div|e> a): <div|e> list<(int,a)>
+fun sched(state:stateS<a,<div|e>>, action:() -> <co<a>,div|e> a): <div|e> list<(int,a)>
   val res = 
     with handler
       return(x)
@@ -75,7 +71,7 @@ pub fun sched(st:stateS<a,<div|e>>, action:() -> <co<a>,div|e> a): <div|e> list<
           resume(st.pid)(st)
         }
     action()
-  res(st)
+  res(state)
 
 
 pub fun init(main: () -> <co<a>|e> ()): <co<a>|e> ()
@@ -90,12 +86,3 @@ pub fun timeshare2(action: () -> <co<a>,div|e> a): <div|e> list<(int,a)>
   with sched(StateS())
   action()
 
-
-pub fun extractResult(pid:int): <co<a>, div, console> a
-  match exitStatus(pid)
-    Nothing ->
-      wait(pid)
-      extractResult(pid)
-    Just(res) -> 
-      println("Process " ++ getPid().show ++ " Extracted  " ++ pid.show)
-      res
