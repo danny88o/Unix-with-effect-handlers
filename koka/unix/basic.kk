@@ -1,26 +1,6 @@
 module basic
 
-/* 
------------
-Basic IO
------------
-*/
-
-pub alias fileDesc = int;
-
-pub effect fun write(fileDesc: fileDesc, fileContent: string): ()
-
-
-pub fun basicIO(action : () -> <write|e> a ) : e (a,string)
-  var buffer: string := ""
-  with handler
-    return(x) (x,buffer)
-    fun write(fd,s) buffer := buffer ++ s
-  action()
-
-pub fun echo(cs: string): write ()
-  val stdOut: fileDesc = 0;
-  write(stdOut,cs)
+import basicIO
 
 /* 
 ----------
@@ -72,7 +52,7 @@ pub fun schedule(jobs: list<pState<a,<fork, div|e>>>): <div|e> list<a>
 pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
   schedule([Paused(fn () reifyProcess(action))])
 
-pub fun interruptWrite(action: () -> <interrupt, write|e> a): <interrupt, write|e> a
+pub fun interruptWrite(action: () -> <interrupt, basicIO/write|e> a): <interrupt, basicIO/write|e> a
   with override fun write(fd,s)
     interrupt()
     write(fd,s)
