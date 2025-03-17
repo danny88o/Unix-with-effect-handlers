@@ -11,22 +11,22 @@ div type stateP<a,e>
   Ready(res:proc<a,e>)
 
 struct stateS<a,e> (
-  q    :list<(int,stateP<a,e>)> = [], 
-  done :list<(int,a)>           = [], 
-  pid  :int                     =  1, 
+  q    :list<(int,stateP<a,e>)> = [],
+  done :list<(int,a)>           = [],
+  pid  :int                     =  1,
   pnext:int                     =  2
 )
 
 fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> ()
     match st.q
       Nil -> put(st)
-      Cons((pid, Blocked(pid',res)), q') -> 
-          if st.done.has(pid') then 
+      Cons((pid, Blocked(pid',res)), q') ->
+          if st.done.has(pid') then
             put(st(q=q', pid=pid))
             res()
-          else 
+          else
             runNext(st(q = q'++[(pid, Blocked(pid',res))])) // Push to back of queue
-      Cons((pid, Ready(res)), q') -> 
+      Cons((pid, Ready(res)), q') ->
         put(st(q=q', pid=pid))
         res()
 
@@ -34,7 +34,7 @@ fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> ()
 fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <div|e> list<(int, a)>
   fun run(a)
     with handler
-      return(x) 
+      return(x)
         val st = get()
         val done' = st.done ++ [(st.pid, x)]
         runNext(st(done=done'))
@@ -46,15 +46,15 @@ fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|
         val q' = st.q ++ [(child_pid, Ready(child))]
         put(st(q=q', pnext=child_pid+1))
         resume(child_pid)
-        
+
       ctl wait(pid')
         val st = get()
         val resume' = fn() resume(())
-        val q' = if st.q.has(pid') 
-          then st.q ++ [(st.pid, Blocked(pid', resume'))] 
+        val q' = if st.q.has(pid')
+          then st.q ++ [(st.pid, Blocked(pid', resume'))]
           else st.q ++ [(st.pid, Ready(resume'))]
         runNext(st(q=q'))
-      
+
       ctl uInterrupt()
         val st = get()
         val resume' = fn() resume(())
@@ -70,7 +70,7 @@ fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|
         val st = get()
         resume(st.pid)
     a()
-    
+
   with runState(init_state)
   run(action)
   get().done
@@ -78,12 +78,3 @@ fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|
 pub fun timeshare3(action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <div|e> list<(int, a)>
   with sched(StateS())
   action()
-
-fun main()
-  val res =
-    with sched(StateS())
-    fib(16)
-  match res.lookup(fn(x) x == 1)
-    Nothing -> println("Error")
-    Just(x) -> println(x)
-    

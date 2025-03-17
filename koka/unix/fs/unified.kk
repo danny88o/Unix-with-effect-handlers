@@ -37,14 +37,14 @@ File reading and writing
 */
 
 // write effect is defined in basic/write
-fun fread(ino:int, fs:fileSystem): fail string 
+fun fread(ino:int, fs:fileSystem): fail string
   val inode = fs.ilist.lookup-fail(ino)
   fs.dreg.lookup-fail(inode.loc)
 
 fun fwrite(ino:int, cs:string, fs:fileSystem): fail fileSystem
   val loc = fs.ilist.lookup-fail(ino).loc
   val file = fs.dreg.lookup-fail(loc)
-  val dreg = fs.dreg.modify(loc, file++cs) 
+  val dreg = fs.dreg.modify(loc, file++cs)
   fs(dreg=dreg)
 
 
@@ -59,7 +59,7 @@ File creating and opening
 fun fopen(fname:string, fs:fileSystem): fail int
   fs.dir.lookup-fail(fname)
 
-  
+
 fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
   if fs.dir.has(fname) then
     val ino = fopen(fname, fs)
@@ -148,7 +148,7 @@ pub fun fileIO(action: () -> <fileIO|e> a): e a
       with withDefault(())
       fs := funlink(fname, fs)
   action()
-  
+
 /*
 Stream Redirection
 */
@@ -170,7 +170,7 @@ pub fun (>)(action: () -> <fileIO, exit|e> a, fname: string): <fileIO,exit|e> a
       link(src, dest)
     fun unlink(fname_)
       unlink(fname_)
-    
+
   action()
 
 
@@ -182,5 +182,5 @@ pub fun cp(do-link: bool, src:string, dest:string): <fileIO, exit> ()
         Nothing -> exit(1)
         Just(cs) -> (fn() {write(1, cs)}) > dest
 
-// pub fun rm(fname:string): unlink ()
-//   unlink(fname)
+pub fun rm(fname:string): fileIO ()
+  unlink(fname)

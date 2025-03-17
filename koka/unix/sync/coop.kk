@@ -1,14 +1,30 @@
-module coop
+module sync/coop
 
-
+import sync/co
 /*
 Cooperative Multithreading
 */
-pub effect coop
-  ctl yield(): ()
-  fun spawn(f: () -> ()): ()
 
-pub fun multithreading(action:() -> <coop,div|e> a): <div|e> ()
+// div type stateP<a,e>
+//   Blocked(pid:int, res:proc<a,e>)
+//   Ready(res:proc<a,e>)
+
+// struct stateS<a,e> (
+//   q    :list<(int,stateP<a,e>)> = [],
+//   done :list<(int,a)>           = [],
+//   pid  :int                     =  1,
+//   pnext:int                     =  2
+// )
+
+alias container<a> = list<(int,a)>
+alias eff = <coop, div, cell<container<coop>>>
+
+pub div effect coop
+  ctl yield(): ()
+  fun spawn(f: () -> eff ()): ()
+
+
+pub fun multithreading(action:() -> <eff|e> a): <div|e> ()
   var threads := []
 
   fun enqueue(t)
@@ -16,7 +32,7 @@ pub fun multithreading(action:() -> <coop,div|e> a): <div|e> ()
   fun dequeue()
     match threads
       Nil -> ()
-      Cons(t, ts) -> 
+      Cons(t, ts) ->
         threads := ts
         t()
 
@@ -28,6 +44,5 @@ pub fun multithreading(action:() -> <coop,div|e> a): <div|e> ()
   action()
 
 // pub fun fib(n: int): <coop|e> int
-  
 
-  
+
