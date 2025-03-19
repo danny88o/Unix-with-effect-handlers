@@ -1,9 +1,11 @@
 module tests
 
 import basic
+import basicIO
 import fs
 import pipe
-import synchronisation
+import sync/co
+import sync/parametrized
 
 fun main()
   // println("\n\nBasic Tests:")
@@ -13,20 +15,20 @@ fun main()
   // println(test_fork())
   // println(test_interruption())
 
-  // println("\n\nfs: ")
-  // println(test_stream-redirection())
-  // println("")
-  // println(test_fs())
+  println("\n\nfs: ")
+  println(test_stream-redirection())
+  println("")
+  println(test_fs())
 
-  // println("\n\nUtils: ")
-  // println(test_utils())
+  println("\n\nUtils: ")
+  println(test_utils())
 
   println("\n\nSynchronisation")
   println(test_sync())
 
 
 /*
-Basic Functionality Tests 
+Basic Functionality Tests
 */
 
 fun test_io()
@@ -55,7 +57,7 @@ fun test_fork()
   with nondet
   with sessionmgr(Root)
   with status
-  if fork() then 
+  if fork() then
     switchUser(Alice)
     echo(whoami() ++ " ")
   else
@@ -68,7 +70,7 @@ fun test_interruption()
   with interruptWrite
   with sessionmgr(Root)
   with status
-  if fork() then 
+  if fork() then
     switchUser(Alice)
     echo(whoami() ++ "| ")
     star-wars()
@@ -93,7 +95,7 @@ fun test_stream-redirection()
   if fork() then
     switchUser(Alice)
     unix > "ritchie.txt"
-  else 
+  else
     switchUser(Bob)
     hamlet > "hamlet"
 
@@ -104,13 +106,13 @@ fun test_fs()
   with interruptWrite
   with sessionmgr(Root)
   with status
-  
+
   if fork() then
     switchUser(Alice)
     unix > "ritchie.txt"
     cp(False,  "ritchie.txt", "ritchie")
     rm("ritchie.txt")
-  else 
+  else
     switchUser(Bob)
     hamlet > "hamlet"
     cp(True, "hamlet", "act3")
@@ -150,7 +152,7 @@ fun test_sync()
   if pid == 0
   then {
     switchUser(Alice)
-    unix()  
+    unix()
   }
   else {
     switchUser(Bob)

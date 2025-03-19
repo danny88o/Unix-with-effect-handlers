@@ -1,6 +1,7 @@
-module fs_bad
+module bad
 
 import basic
+import basicIO
 import helper
 
 /*
@@ -19,7 +20,7 @@ pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> (b,a)
     return(x)   (curr,x)
     fun get()   curr
     fun put(x)  curr := x
-  action() 
+  action()
 
 /*
 --------------
@@ -56,16 +57,16 @@ File reading and writing
 
 // write effect is defined in basic/write
 pub effect fun read(inum:int): maybe<string>
-pub alias fileRW = <basic/write, read>
+pub alias fileRW = <basicIO/write, read>
 
-fun fread(ino:int, fs:fileSystem): fail string 
+fun fread(ino:int, fs:fileSystem): fail string
   val inode = fs.ilist.lookup-fail(ino)
   fs.dreg.lookup-fail(inode.loc)
 
 fun fwrite(ino:int, cs:string, fs:fileSystem): fail fileSystem
   val loc = fs.ilist.lookup-fail(ino).loc
   val file = fs.dreg.lookup-fail(loc)
-  val dreg = fs.dreg.modify(loc, file++cs) 
+  val dreg = fs.dreg.modify(loc, file++cs)
   fs(dreg=dreg)
 
 pub fun fileRW(action: () -> <fileRW|e> a): <cell<fileSystem>|e> a
@@ -93,7 +94,7 @@ pub alias fileCO = <create, open>
 fun fopen(fname:string, fs:fileSystem): fail int
   fs.dir.lookup-fail(fname)
 
-  
+
 fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
   if fs.dir.has(fname) then
     val ino = fopen(fname, fs)
@@ -118,7 +119,7 @@ pub fun fileCO(action: () -> <fileCO|e> a): <cell<fileSystem>|e> a
   with fun open(fname)
     with withDefault(Nothing)
     Just(fopen(fname, get()))
-  
+
   with mask<cell<fileSystem>>
   action()
 
@@ -169,21 +170,21 @@ pub fun fileLU(action: () -> <fileLU|e> a): <cell<fileSystem>|e> a
       put(fs)
 
   with mask<cell<fileSystem>>
-  action() 
+  action()
 
 
 /*
 Stream Redirection
 */
 
-pub fun (>)(action: () -> <basic/write, create, exit|e> a, fname: string): <basic/write,create,exit|e> a
+pub fun (>)(action: () -> <basicIO/write, create, exit|e> a, fname: string): <basicIO/write,create,exit|e> a
   val maybe-ino = create(fname)
-    
+
   with override fun write(fileDesc, fileContent)
     match maybe-ino
         Nothing   -> exit(1)
-        Just(ino) -> basic/write(ino, fileContent)
-    
+        Just(ino) -> basicIO/write(ino, fileContent)
+
   action()
 
 
@@ -193,16 +194,16 @@ FileIO
 --------------------------
 */
 
-pub alias fileIO = <basic/write, read, open, create, link, unlink>
+pub alias fileIO = <basicIO/write, read, open, create, link, unlink>
 
 pub fun fileIO(action: () -> <fileIO|e> a): <cell<fileSystem>, cell<fileSystem>, cell<fileSystem>|e> a
   with fileRW
   with fileCO
   with fileLU
   action()
-  
 
-pub fun cp(do-link: bool, src:string, dest:string): <basic/write, read, open, create, link, exit> ()
+
+pub fun cp(do-link: bool, src:string, dest:string): <basicIO/write, read, open, create, link, exit> ()
   if do-link then link(src,dest)
   else match open(src)
     Nothing   -> exit(1)

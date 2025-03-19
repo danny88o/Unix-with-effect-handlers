@@ -8,6 +8,10 @@ import sync/co
 pub fun get-arg()
   get-args().head("").parse-int().default(5)
 
+
+
+
+// sync
 pub fun fib(n: int): <div, co<int>> int
   match n
     0 -> 1
@@ -18,6 +22,8 @@ pub fun fib(n: int): <div, co<int>> int
 
       val pid2 = uFork()
       if pid2 == 0 then return fib(n - 2)
+
+      uInterrupt()
 
       return extractResult(pid2) + extractResult(pid1)
 
