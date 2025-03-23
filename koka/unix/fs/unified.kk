@@ -20,31 +20,34 @@ pub effect fileIO
   fun unlink(fname: string): ()
 
 
-pub fun fileIO(action: () -> <fileIO|e> a): e fileSystem
-  var fs: fileSystem := FileSystem()
+pub fun fileIO(action: () -> <cell<fileSystem>,fileIO|e> a): <cell<fileSystem>|e> a
   with handler
     fun read(ino)
       with withDefault(Nothing)
-      Just(fread(ino, fs))
+      val fs = get()
+      Just(fs.fread(ino))
     fun write(ino, cs)
       with withDefault(())
-      fs := fwrite(ino, cs, fs)
+      val fs = get()
+      put(fs.fwrite(ino, cs))
     fun create(fname)
       with withDefault(Nothing)
-      val (ino, fs_new) = fcreate(fname, fs)
-      fs := fs_new
+      val (ino, fs) = get().fcreate(fname)
+      put(fs)
       Just(ino)
     fun open(fname)
       with withDefault(Nothing)
-      Just(fopen(fname, fs))
+      val fs = get()
+      Just(fs.fopen(fname))
     fun link(src, dest)
       with withDefault(())
-      fs := flink(src, dest, fs)
+      val fs = get()
+      put(fs.flink(src, dest))
     fun unlink(fname)
       with withDefault(())
-      fs := funlink(fname, fs)
+      val fs = get()
+      put(fs.funlink(fname))
   action()
-  fs
 
 /*
 Stream Redirection

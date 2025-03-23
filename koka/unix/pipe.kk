@@ -57,23 +57,21 @@ pub fun head(n:int): <await<char>, yield<char>, div> ()
       _    -> head(n)
 
 
-fun pst(c:char, cs:string): <yield<string>, await<char>, div> ()
-  match c
-    '0'  ->
-      yield(cs)
-      yield("0")
-    '\n' ->
-      yield(cs)
-      yield("\n")
-      pst(await(), "")
-    ' ' ->
-      yield(cs)
-      pst(await(), "")
-    c ->
-      pst(await(), cs ++ c.string)
-
-
-pub fun paste(): <yield<string>, await<char>, exn, div> ()
+pub fun paste(): <yield<string>, await<char>, div> ()
+  fun pst(c:char, cs:string): <yield<string>, await<char>, div> ()
+    match c
+      '0'  ->
+        yield(cs)
+        yield("0")
+      '\n' ->
+        yield(cs)
+        yield("\n")
+        pst(await(), "")
+      ' ' ->
+        yield(cs)
+        pst(await(), "")
+      c ->
+        pst(await(), cs ++ c.string)
   pst(await(), "")
 
 
@@ -82,23 +80,24 @@ pub fun sed(target: string, str':string): <await<string>, yield<string>, div> ()
   if str == target then yield(str') else yield(str)
   sed(target, str')
 
-fun freq'(str:string, tbl: list<(string, int)>): <await<string>, yield<list<(string, int)>>, div> ()
-  match str
-    "0" -> yield(tbl)
-    str ->
-      val tbl' =
-        with withDefault([(str,1)] ++ tbl)
-        val sum = tbl.lookup-fail(str)
-        tbl.modify(str, sum + 1)
-      freq'(await(), tbl')
 
 pub fun freq(): <await<string>, yield<list<(string, int)>>, div> ()
+  fun freq'(str:string, tbl: list<(string, int)>): <await<string>, yield<list<(string, int)>>, div> ()
+    match str
+      "0" -> yield(tbl)
+      str ->
+        val tbl' =
+          with withDefault([(str,1)] ++ tbl)
+          val sum = tbl.lookup-fail(str)
+          tbl.modify(str, sum + 1)
+        freq'(await(), tbl')
   freq'(await(), [])
 
-fun renderRow(tuple: (string, int)): string
-  val (s,i) = tuple
-  s ++ ":" ++ i.show ++ ";"
 
 pub fun renderTable(): <await<list<(string, int)>>, basicIO/write|e> ()
+  fun renderRow(tuple: (string, int)): string
+    val (s,i) = tuple
+    s ++ ":" ++ i.show ++ ";"
+
   val tbl: list<(string, int)> = await()
   echo(tbl.map(renderRow).join)

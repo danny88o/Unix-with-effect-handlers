@@ -2,23 +2,23 @@ module sync/ref
 
 import basic
 import helper
-import sync/co
+pub import sync/co
 
-alias proc<a,e> = () -> <st<global>, div|e> ()
+alias proc<a,e,h> = () -> <st<h>, div|e> ()
 
-div type stateP<a,e>
-  Blocked(pid:int, res:proc<a,e>)
-  Ready(res:proc<a,e>)
+type stateP<a,e,h>
+  Blocked(pid:int, res:proc<a,e,h>)
+  Ready(res:proc<a,e,h>)
 
-struct stateS<a,e> (
-  q    :list<(int,stateP<a,e>)> = [],
+struct stateS<a,e,h> (
+  q    :list<(int,stateP<a,e,h>)> = [],
   done :list<(int,a)>           = [],
   pid  :int                     =  1,
   pnext:int                     =  2
 )
 
 
-fun sched(init_state: stateS<a,e>, action: () -> <co<a>, st<global>, div|e> a): <st<global>, div|e> list<(int, a)>
+fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <st<h>, div|e> list<(int, a)>
   val st = ref(init_state)
 
   fun runNext(state)

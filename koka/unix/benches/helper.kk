@@ -4,9 +4,10 @@ import std/os/env
 
 import sync/co
 
+import basic
 
-pub fun get-arg()
-  get-args().head("").parse-int().default(5)
+pub fun get-arg(def=5)
+  get-args().head("").parse-int().default(def)
 
 
 
@@ -51,3 +52,11 @@ pub fun getPid1(action: () -> e list<(int,int)>): e int
   //     val res = exitStatus(pid)
   //     resume(res)
   //   ctl getPid() resume(getPid())
+
+pub fun chainSwitch(n)
+  with repeat(n)
+  match whoami()
+    "root" -> switchUser(Alice)
+    "alice" -> switchUser(Bob)
+    "bob" -> switchUser(Root)
+

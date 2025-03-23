@@ -1,14 +1,13 @@
-module benches/fs
+module benches/fs_unified
 
-import fs/unified
 import fs/storage
-import benches/hamlet
 
-// import fs/fs
+// import fs
+import fs/unified
 
 import benches/helper
 
-fun file_mayhem(n: int)
+pub fun file_mayhem(n: int)
   var i := 0
   while{i < n}
     val name = "file" ++ i.show
@@ -33,8 +32,9 @@ fun file_mayhem(n: int)
 
 
 fun main()
-  val n = 10//get-arg()
-  val fs =
+  val n = get-arg(1000)
+  val (fs, _) =
+    with runState(FileSystem())
     with fileIO
     file_mayhem(n)
-  println(fs)
+  println(fs.dnext)

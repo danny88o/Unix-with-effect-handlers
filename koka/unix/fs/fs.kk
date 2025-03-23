@@ -1,28 +1,10 @@
 module fs
 
-import basicIO
+pub import basicIO
 import basic
 import helper
 import fs/storage
 
-
-/*
---------------
-Handling State
---------------
-*/
-
-pub effect cell<a>
-  fun get(): a
-  fun put(a:a): ()
-
-pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> (b,a)
-  var curr := init
-  with handler
-    return(x)   (curr,x)
-    fun get()   curr
-    fun put(x)  curr := x
-  action()
 
 /*
 ------------------------
@@ -38,10 +20,12 @@ pub alias fileRW = <basicIO/write, read>
 pub fun fileRW(action: () -> <fileRW, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fun read(ino)
     with withDefault(Nothing)
-    Just(fread(ino, get()))
+    val fs = get()
+    Just(fs.fread(ino))
   with fun write(ino, cs)
     with withDefault(())
-    put(fwrite(ino, cs, get()))
+    val fs = get()
+    put(fs.fwrite(ino, cs))
 
   action()
 
@@ -59,12 +43,13 @@ pub alias fileCO = <create, open>
 pub fun fileCO(action: () -> <fileCO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fun create(fname)
     with withDefault(Nothing)
-    val (ino, fs) = fcreate(fname, get())
+    val (ino, fs) = get().fcreate(fname)
     put(fs)
     Just(ino)
   with fun open(fname)
     with withDefault(Nothing)
-    Just(fopen(fname, get()))
+    val fs = get()
+    Just(fs.fopen(fname))
   action()
 
 
@@ -82,12 +67,12 @@ pub alias fileLU = <link, unlink>
 pub fun fileLU(action: () -> <fileLU, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
   with fun link(src, dest)
       with withDefault(())
-      val fs = flink(src, dest, get())
-      put(fs)
+      val fs = get()
+      put(fs.flink(src, dest))
   with fun unlink(fname)
       with withDefault(())
-      val fs = funlink(fname, get())
-      put(fs)
+      val fs = get()
+      put(fs.funlink(fname))
   action()
 
 
@@ -115,9 +100,9 @@ FileIO
 pub alias fileIO = <basicIO/write, read, open, create, link, unlink>
 
 pub fun fileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+  with fileLU
   with fileRW
   with fileCO
-  with fileLU
   action()
 
 
@@ -132,27 +117,30 @@ pub fun cp(do-link: bool, src:string, dest:string): <basicIO/write, read, open, 
 pub fun rm(fname:string): unlink ()
   unlink(fname)
 
-pub fun compactFileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
-  with fun read(ino)
-      with withDefault(Nothing)
-      Just(fread(ino,get()))
-  with fun write(ino, cs)
-      with withDefault(())
-      put(fwrite(ino, cs, get()))
-  with fun create(fname)
-      with withDefault(Nothing)
-      val (ino, fs) = fcreate(fname, get())
-      put(fs)
-      Just(ino)
-  with fun open(fname)
-      with withDefault(Nothing)
-      Just(fopen(fname, get()))
-  with fun link(src, dest)
-        with withDefault(())
-        val fs = flink(src, dest, get())
-        put(fs)
-  with fun unlink(fname)
-        with withDefault(())
-        val fs = funlink(fname, get())
-        put(fs)
-  action()
+// pub fun compactFileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
+//   with fun read(ino)
+//       with withDefault(Nothing)
+//       val fs = get()
+//       Just(fs.fread(ino))
+//   with fun write(ino, cs)
+//       with withDefault(())
+//       val fs = get()
+//       put(fs.fwrite(ino, cs))
+//   with fun create(fname)
+//       with withDefault(Nothing)
+//       val (ino, fs) = get().fcreate(fname)
+//       put(fs)
+//       Just(ino)
+//   with fun open(fname)
+//       with withDefault(Nothing)
+//       val fs = get()
+//       Just(fs.fopen(fname))
+//   with fun link(src, dest)
+//         with withDefault(())
+//         val fs = get()
+//         put(fs.flink(src, dest))
+//   with fun unlink(fname)
+//         with withDefault(())
+//         val fs = get()
+//         put(fs.funlink(fname))
+//   action()

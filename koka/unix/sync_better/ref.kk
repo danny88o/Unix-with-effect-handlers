@@ -4,7 +4,7 @@ import basic
 import helper
 import sync_better/co
 
-alias proc<a,e,h> = () -> <st<h>, div, console|e> ()
+alias proc<a,e,h> = () -> <st<h>, div|e> ()
 
 type stateP<a,e,h>
   Blocked(pid:int, res:proc<a,e,h>)
@@ -18,7 +18,7 @@ struct stateS<a,e,h> (
 )
 
 
-fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div, console|e> a):  <st<h>, div, console|e> list<(int, a)>
+fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <st<h>, div|e> list<(int, a)>
   val st = ref(init_state)
 
   fun runNext(state)
@@ -26,12 +26,10 @@ fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div, console|e
       Nothing -> st := state
       Just(((pid, Blocked(pid',res)), q')) ->
           if state.done.has(pid') then
-            println("pnext" ++ state.pnext.show)
             st := state(q=q', pid=pid)
             res()
           else runNext(state(q = q'.enqueue((pid, Blocked(pid',res)))))
       Just(((pid, Ready(res)), q')) ->
-        println("pnext" ++ state.pnext.show)
         st := state(q=q', pid=pid)
         res()
 

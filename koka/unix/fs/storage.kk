@@ -21,13 +21,11 @@ fun inode/show(inode: inode): string
   "(lno=" ++ inode.lno.show ++ ", loc=" ++ inode.loc.show ++ ")"
 
 pub fun fileSystem/show(fs: fileSystem): string
-  var buff := ""
-  buff := buff ++ "dir: "   ++ fs.dir.show   ++ "\n"
-  buff := buff ++ "ilist: " ++ fs.ilist.show ++ "\n"
-  buff := buff ++ "dreg: "  ++ fs.dreg.show  ++ "\n"
-  buff := buff ++ "dnext: " ++ fs.dnext.show ++ "\n"
-  buff := buff ++ "inext: " ++ fs.inext.show ++ "\n"
-  buff
+  "dir: "   ++ fs.dir.show   ++ "\n" ++
+  "ilist: " ++ fs.ilist.show ++ "\n" ++
+  "dreg: "  ++ fs.dreg.show  ++ "\n" ++
+  "dnext: " ++ fs.dnext.show ++ "\n" ++
+  "inext: " ++ fs.inext.show ++ "\n"
 
 /*
 ------------------------
@@ -35,17 +33,15 @@ File reading and writing
 ------------------------
 */
 
-// write effect is defined in basic/write
-pub fun fread(ino:int, fs:fileSystem): fail string
+pub fun fread(fs:fileSystem, ino:int): fail string
   val inode = fs.ilist.lookup-fail(ino)
   fs.dreg.lookup-fail(inode.loc)
 
-pub fun fwrite(ino:int, cs:string, fs:fileSystem): fail fileSystem
+pub fun fwrite(fs:fileSystem, ino:int, cs:string): fail fileSystem
   val loc = fs.ilist.lookup-fail(ino).loc
   val file = fs.dreg.lookup-fail(loc)
   val dreg = fs.dreg.modify(loc, file++cs)
   fs(dreg=dreg)
-
 
 
 /*
@@ -55,24 +51,24 @@ File creating and opening
 */
 
 
-pub fun fopen(fname:string, fs:fileSystem): fail int
+pub fun fopen(fs:fileSystem, fname:string): fail int
   fs.dir.lookup-fail(fname)
 
 
-pub fun fcreate(fname:string, fs: fileSystem): fail (int,fileSystem)
+pub fun fcreate(fs: fileSystem, fname:string): fail (int,fileSystem)
   if fs.dir.has(fname) then
-    val ino = fopen(fname, fs)
+    val ino = fs.fopen(fname)
     val inode = fs.ilist.lookup-fail(ino)
     val dreg' = fs.dreg.modify(inode.loc, "")
     (ino, fs(dreg=dreg'))
   else
     val loc = fs.dnext
-    val dreg = [(loc, "")] ++ fs.dreg
+    val dreg' = Cons((loc, ""), fs.dreg)
     val ino = fs.inext
     val inode = Inode(loc=loc, lno=1)
-    val ilist = [(ino, inode)] ++ fs.ilist
-    val dir = [(fname, ino)] ++ fs.dir
-    (ino, fs(dir=dir, ilist=ilist, dreg=dreg, dnext=fs.dnext+1, inext=fs.inext+1))
+    val ilist' = Cons((ino, inode), fs.ilist)
+    val dir' = Cons((fname, ino), fs.dir)
+    (ino, fs(dir=dir', ilist=ilist', dreg=dreg', dnext=fs.dnext+1, inext=fs.inext+1))
 
 
 /*
@@ -81,7 +77,7 @@ File linking and unlinking
 --------------------------
 */
 
-pub fun flink(src:string, dest:string, fs: fileSystem): fail fileSystem
+pub fun flink(fs: fileSystem, src:string, dest:string): fail fileSystem
   if fs.dir.has(dest) then fail()
   val ino = fs.dir.lookup-fail(src)
   val inode = fs.ilist.lookup-fail(ino)
@@ -91,7 +87,7 @@ pub fun flink(src:string, dest:string, fs: fileSystem): fail fileSystem
     ilist = fs.ilist.modify(ino, inode')
   )
 
-pub fun funlink(fname:string, fs:fileSystem)
+pub fun funlink(fs:fileSystem, fname:string): fail fileSystem
   if fs.dir.has(fname) then
     val ino = fs.dir.lookup-fail(fname)
     val dir' = fs.dir.remove(fname)
@@ -105,3 +101,23 @@ pub fun funlink(fname:string, fs:fileSystem)
       val dreg' = fs.dreg.remove(inode.loc)
       fs(dir=dir', ilist=ilist', dreg=dreg')
   else fail()
+
+
+/*
+--------------
+Handling State
+--------------
+*/
+
+pub effect cell<a>
+  fun get(): a
+  fun put(a:a): ()
+
+pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> (b,a)
+  var curr := init
+  with handler
+    return(x)   (curr,x)
+    fun get()   curr
+    fun put(x)  curr := x
+  action()
+

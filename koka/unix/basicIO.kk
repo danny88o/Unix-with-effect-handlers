@@ -1,6 +1,6 @@
 module basicIO
 
-/* 
+/*
 -----------
 Basic IO
 -----------
@@ -18,6 +18,7 @@ pub fun basicIO(action : () -> <write|e> a ) : e (a,string)
     fun write(fd,s) buffer := buffer ++ s
   action()
 
+val stdOut: fileDesc = 0;
+
 pub fun echo(cs: string): write ()
-  val stdOut: fileDesc = 0;
   write(stdOut,cs)

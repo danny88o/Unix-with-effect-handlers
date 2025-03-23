@@ -2,11 +2,11 @@ module basic
 
 import basicIO
 
-/* 
+/*
 ----------
 Exceptions
 ----------
-*/ 
+*/
 
 pub effect ctl exit(code: int): ()
 
@@ -37,8 +37,8 @@ type pState<a,e>
   Paused(remaction: () -> e pState<a,e>)
 
 fun reifyProcess(action: () -> <interrupt|e> a): e pState<a,e>
-  with raw ctl interrupt() 
-      Paused(fn() rcontext.resume(()))
+  with ctl interrupt()
+      Paused(fn() resume(()))
   Done(action())
 
 pub fun schedule(jobs: list<pState<a,<fork, div|e>>>): <div|e> list<a>
@@ -46,7 +46,7 @@ pub fun schedule(jobs: list<pState<a,<fork, div|e>>>): <div|e> list<a>
     match ps
       Nil -> done
       Cons(Done(ret),xs) -> sched(xs, done ++ [ret])
-      Cons(Paused(action), xs) -> sched(xs ++ nondet(action), done) 
+      Cons(Paused(action), xs) -> sched(xs ++ nondet(action), done)
   sched(jobs, [])
 
 pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
@@ -56,7 +56,7 @@ pub fun interruptWrite(action: () -> <interrupt, basicIO/write|e> a): <interrupt
   with override fun write(fd,s)
     interrupt()
     write(fd,s)
-    
+
   action()
 
 
@@ -83,7 +83,7 @@ effect fun ask(): string
 pub fun whoami(): ask string
   ask()
 
-fun env(u:user, action: () -> <ask|e> a): e a 
+fun env(u:user, action: () -> <ask|e> a): e a
   with fun ask() u.show
   action()
 
@@ -98,5 +98,20 @@ pub fun sessionmgr(u: user, action: () -> <subUser,ask|e> a): e a
   with ctl subUser(switch-to)
     mask<ask>
       with env(switch-to)
+      resume(())
+  action()
+
+pub fun sessionmgr2(u: user, action: () -> <subUser,ask|e> a): e a
+  var curr := u
+  with fun ask() curr.show
+  with ctl subUser(switch-to)
+    curr := switch-to
+    resume(())
+  action()
+
+pub fun sessionmgr3(u: user, action: () -> <subUser,ask|e> a): e a
+  with env(u)
+  with ctl subUser(switch-to)
+      with override fun ask() switch-to.show
       resume(())
   action()
