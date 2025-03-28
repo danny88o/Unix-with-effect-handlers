@@ -15,7 +15,7 @@ pub fun get-arg(def=5)
 // sync
 pub fun fib(n: int): <div, co<int>> int
   match n
-    0 -> 1
+    0 -> 0
     1 -> 1
     _ ->
       val pid1 = uFork()
@@ -54,9 +54,12 @@ pub fun getPid1(action: () -> e list<(int,int)>): e int
   //   ctl getPid() resume(getPid())
 
 pub fun chainSwitch(n)
-  with repeat(n)
   match whoami()
     "root" -> switchUser(Alice)
     "alice" -> switchUser(Bob)
     "bob" -> switchUser(Root)
+  chainSwitch(n - 1)
 
+pub fun unwrap(x: maybe<a>): exn a
+  match x
+    Just(x) -> x

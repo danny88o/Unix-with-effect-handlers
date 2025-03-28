@@ -1,0 +1,100 @@
+compile runFib_memo full
+compile runFileMayhem fs
+update
+compile runFileMayhem fs
+compile runFib_memo full
+compile runFib fib
+compile runChainSwitch session
+compiled runChainSwitch session
+update
+run runFib_memo 30
+update
+run runFib_memo 30
+update
+q
+aqqq
+run runFib_memo 30
+run runFib_memo 2
+update
+run runFib_memo 30
+run runFib_memo 20
+run runFib_memo 4
+run runFib_memo 2
+run runFib_memo 5
+run runFib_memo 2
+run runFib_memo 1
+run runFib_memo 0
+run runFib_memo 20
+update
+run runFib_memo 20
+update
+add
+update
+run runFib_memo 22
+run runFib_memo 25
+run runFib_memo 20
+run runFib_memo 3
+update
+compile runFib_memo full
+run runFib_memo 20
+update
+run runFib_memo 20
+run runFib_memo 6
+update
+run runFib_memo 6
+update
+run runFib_memo 6
+update
+run runFib_memo 6
+run runFib_memo 5
+run runFib_memo 6
+run runFib_memo 5
+update
+run runFib_memo 5
+update
+run runFib_memo 5
+update
+run runFib_memo 5
+run runFib_memo 3
+run runFib_memo 2
+run runFib_memo 1
+run runFib_memo 0
+run runFib_memo 4
+run runFib_memo 5
+update
+run runFib_memo 5
+run runFib_memo 4
+run runFib_memo 5
+run runFib_memo 3
+update
+run runFib_memo 7
+update
+run runFib_memo 7
+help run
+run (Nat.toText 6)
+run Nat.toText 6
+Nat.toText 6
+run runFib_memo 7
+update
+run runFib_memo 7
+update
+run runFib_memo 7
+7
+run runFib_memo 6
+run runFib_memo 7
+run runFib_memo 6
+run runFib_memo 7
+run runFib_memo 9
+run runFib_memo 10
+run runFib_memo 5
+run runFib_memo 4
+run runFib_memo 3
+run runFib_memo 6
+run runFib_memo 5
+run runFib_memo 4
+run runFib_memo 3
+run runFib_memo 2
+run runFib_memo 1
+run runFib_memo 0
+run runFib_memo 6
+run runFib_memo 7

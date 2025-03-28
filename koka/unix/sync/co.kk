@@ -13,21 +13,22 @@ pub fun extractResult(pid:int): <co<a>, div> a
     Nothing ->
       wait(pid)
       extractResult(pid)
-    Just(res) -> 
+    Just(res) ->
       res
 
-pub effect cell<a>
-  fun get(): a
-  fun put(a:a): ()
 
-pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> a
-  var curr := init
-  with handler
-    fun get()   curr
-    fun put(x)  curr := x
-  action() 
+pub struct funcqueue<a> (
+  enter: list<a> = [],
+  out: list<a> = []
+)
 
-// pub alias queue<a> = list<(int,a)>
+pub fun enqueue<a>(q:funcqueue<a>, x:a): funcqueue<a>
+  q(enter = Cons(x, q.enter))
 
+pub fun dequeue<a>(q:funcqueue<a>): div maybe<(a, funcqueue<a>)>
+  match q
+    Funcqueue(Nil, Nil) -> Nothing
+    Funcqueue(in_q, Nil) -> dequeue(Funcqueue(Nil, in_q.reverse()))
+    Funcqueue(in_q, Cons(x, xs)) -> Just((x, Funcqueue(in_q, xs)))
 
 

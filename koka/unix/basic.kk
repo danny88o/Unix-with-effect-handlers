@@ -104,9 +104,9 @@ pub fun sessionmgr(u: user, action: () -> <subUser,ask|e> a): e a
 pub fun sessionmgr2(u: user, action: () -> <subUser,ask|e> a): e a
   var curr := u
   with fun ask() curr.show
-  with ctl subUser(switch-to)
+  with fun subUser(switch-to)
     curr := switch-to
-    resume(())
+    // resume(())
   action()
 
 pub fun sessionmgr3(u: user, action: () -> <subUser,ask|e> a): e a
@@ -114,4 +114,16 @@ pub fun sessionmgr3(u: user, action: () -> <subUser,ask|e> a): e a
   with ctl subUser(switch-to)
       with override fun ask() switch-to.show
       resume(())
+  action()
+
+effect env
+  val ask2: string
+  ctl subUser2(u: user): ()
+
+pub fun sessionmgr4(u: user, action: () -> <env,div|e> a): <div|e> a
+  with handler
+    val ask2 = u.show
+    raw ctl subUser2(new_u)
+      with sessionmgr4(new_u)
+      rcontext.resume-shallow(())
   action()

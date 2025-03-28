@@ -1,0 +1,298 @@
+
+{-
+    BasicIO
+-}
+
+-- backwardsIO : Request {BasicIO} a ->{IO, Exception} a
+-- backwardsIO result = match result with
+--     { echo text -> resume } ->
+--         let thunk = handle resume () with basicIO
+--             putText stdOut text;
+--             thunk
+--     { result } -> result
+
+multiHandlers _ = echo "Hello,"; echo " World!\n"
+
+runMultiHandlers _ = handle !multiHandlers with basicIO
+
+{-
+    Filesystem
+-}
+
+cat : Text ->{BasicIO, FileRW, FileCO} ()
+cat name = echo (FileRW.read (open name))
+
+catTest _ =
+    write ((open "test.txt"), "Hello, World!")
+    cat "test.txt"
+
+runCat _ = unix catTest
+
+{-
+    Userspace
+-}
+
+-- envVariables _ =
+--     echo !whoami
+--     echo "\n"
+--     adduser "alice"
+--     grant "alice" Write
+--     grant "alice" Read
+--     grant "alice" AddUser
+--     grant "alice" Grant
+
+--     su "alice"
+--     -- export "HOME" "/home/alice"
+--     echo (ask "HOME")
+--     echo "\n"
+--     adduser "bob"
+--     grant "bob" Read
+--     adduser "bob"
+
+--     su "bob"
+--     echo (ask "HOME")
+
+
+-- envVariablesTest _ = unix envVariables
+
+{-
+    Filesystem
+-}
+
+
+
+{-
+    Process Synchronization
+-}
+
+
+-- ritchie _ = echo "UNIX is basically\n"; echo "a simple operating system\n"; echo "but you have to be a genius to understand the simplicity\n"
+-- hamlet _ = echo "To be, or not to be,\n"; echo "that is the question:\n"; echo "Wether 'tis nobler in the mind to suffer\n";
+
+-- proc _ = let pid = ufork
+--              if pid == 0
+--              then ritchie ()
+--              else
+--                 su "bob"
+--                 wait pid
+--                 hamlet ()
+
+-- runProc _ = unix proc
+
+
+withDefault: a -> Request {Error, e} a -> {e} a
+withDefault default = cases
+    { result } -> result
+    { Error.throw _ -> _ } -> default
+
+extractResult: Nat -> {Co a} a
+extractResult pid = match getResult pid with
+    None ->
+        wait(pid)
+        extractResult pid
+    Some x -> x
+
+parseArgs _ =
+    let default = 0
+        match getArgs() with
+            cs +: _ -> match Text.toNat(cs) with
+                Some n -> n
+                None -> default
+            _ -> default
+
+fib : Nat -> {Co Nat} Nat
+fib n = match n with
+    0 -> 1
+    1 -> 1
+    _ ->
+        pid1 = ufork
+        if pid1 == 0
+        then fib (n - 1)
+        else
+            pid2 = ufork
+            if pid2 == 0
+            then fib (n - 2)
+            else (extractResult pid2) + (extractResult pid1)
+
+
+fibArg _ = let fib parseArgs()
+
+runFib _ =
+    _ = timeshare2 fibArg
+    ()
+
+unwrap : Optional a -> {Exception} a
+unwrap m = match m with
+    None ->  Exception.raise (Generic.failure "unwrap" m)
+    Some x -> x
+
+fileMayhem : Nat -> {FileCO2, FileLU, FileRW, IO, Exception, Error} Unit
+fileMayhem = cases
+    0 -> ()
+    n ->
+        n' = Nat.toText n
+
+        name = "file" ++ n'
+        _ = FileCO2.create name
+        inum1 = unwrap(FileCO2.open(name))
+        FileRW.write(inum1, n')
+
+        middle = "mid"
+        link (name, middle)
+
+        end = "end"
+        _ = FileCO2.create end
+
+        inum2 = unwrap(FileCO2.open(middle))
+        txt = FileRW.read inum2
+
+        inum3 = unwrap(FileCO2.open end)
+        FileRW.write (inum3, txt)
+
+        unlink middle
+        unlink name
+
+        fileMayhem (n - 1)
+
+fileMayhemArg _ = let fileMayhem parseArgs()
+
+runFileMayhem _ =
+    _ =
+        handle
+            handle
+                handle
+                    handle
+                        handle
+                            fileMayhemArg()
+                        with fileCO2
+                    with fileLU
+                with fileRW
+            with warn
+        with runState initialFileSystem
+    ()
+
+chainSwitch : Nat -> {IO, Exception, Session} ()
+chainSwitch n =
+    if n <= 0 then ()
+    else
+        match whoami() with
+            "root" -> su "alice"
+            "alice" -> su "bob"
+            "bob" -> su "root"
+            _ ->printLine "Unknown user"
+        chainSwitch(n - 1)
+
+chainSwitchArg _ = let chainSwitch parseArgs()
+
+initdaniel : [(User, [(Text, Text)])]
+initdaniel = [
+    (User.Username "root", [("USER", "root")]),
+    (User.Username "alice", [("USER", "alice")]),
+    (User.Username "bob", [("USER", "bob")])
+    ]
+
+runChainSwitch _ =
+    _ =
+        handle
+            handle
+                handle
+                    chainSwitchArg()
+                with env (User.Username "root")
+            with runState initdaniel
+        with warn
+    ()
+
+ability FileCO2 where
+  create : Text ->{FileCO2} Nat
+  open : Text ->{FileCO2} Optional Nat
+
+fileCO2 : Request {FileCO2} a ->{State FileSystemT, Error} a
+fileCO2 = cases
+  { FileCO2.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO2
+  { FileCO2.open name -> resume }   ->
+    fs = State.get()
+    ino = handle Some(fopen name fs) with withDefault (None)
+    handle resume ino with fileCO2
+  { result } -> result
+
+-- memoize : Text -> Nat -> {FileRW, FileCO2, Session, Exception} Unit
+memoize file result =
+    -- printLine ("Memoizing " ++ file ++ " with " ++ (Nat.toText result))
+    su "root"
+    ino = FileCO2.create file
+    write (ino, (Nat.toText result))
+    su "alice"
+
+fib_memo : Nat -> {Co Nat, Status, Session, FileRW, FileCO2, Exception} Empty
+fib_memo n =
+    file = "fib" ++ (Nat.toText n) ++ ".txt"
+    match (open (file)) with
+        None ->
+            match n with
+                0 ->
+                    memoize file 0
+                    exit 0
+                1 ->
+                    memoize file 1
+                    exit 1
+                _ ->
+                    pid1 = ufork
+                    if pid1 == 0
+                    then fib_memo (n - 1)
+                    else
+                        pid2 = ufork
+                        if pid2 == 0
+                        then fib_memo (n - 2)
+                        else
+                            uinterrupt
+                            result = (extractResult pid2) + (extractResult pid1)
+                            memoize file result
+                            exit result
+        Some ino ->
+            result = unwrap(Nat.fromText(FileRW.read ino))
+            -- printLine ((FileRW.read ino) ++ " " ++ file)
+            exit (result)
+
+-- count : Nat -> Nat -> (Nat ->{g} Empty) ->{g, Status} Unit
+count i n func =
+    if i < n
+    then
+        pid = ufork
+        if pid == 0 then
+            -- printLine (Nat.toText i)
+            _ = func i
+            ()
+        else
+            wait pid
+            count (i + 1) n func
+    else
+        ()
+
+fib_memoArg _ = let count 0 parseArgs() fib_memo
+
+
+runFib_memo _ =
+    _ =
+        handle
+            handle
+                handle
+                    handle
+                        handle
+                            handle
+                                handle
+                                    handle
+                                        fib_memoArg()
+                                    with exitHandler
+                                with scheduler (Sstate.Sstate [] [] 1 2)
+                            with env (User.Username "root")
+                        with runState initdaniel
+                    with fileRW
+                with fileCO2
+            with runState initialFileSystem
+        with warn
+    ()

@@ -1,7 +1,9 @@
 #!/bin/sh
 
 setup_sync() {
-    STACK_SIZE = 0 #300000000
+    STACK_SIZE=300000000
+
+    printf "$STACK_SIZE"
 
     koka -c benches/sync_param.kk --stack "$STACK_SIZE" -o benches/out/sync_param.kk.out
     koka -c benches/sync_ref.kk   --stack "$STACK_SIZE" -o benches/out/sync_ref.kk.out
@@ -38,11 +40,11 @@ run_fs() {
 setup_session() {
     koka benches/session_1.kk -o benches/out/session_1.kk.out
     koka benches/session_2.kk -o benches/out/session_2.kk.out
-    koka benches/session_3.kk -o benches/out/session_3.kk.out
+    # koka benches/session_3.kk -o benches/out/session_3.kk.out
 
     chmod u+x benches/out/session_1.kk.out
     chmod u+x benches/out/session_2.kk.out
-    chmod u+x benches/out/session_3.kk.out
+    # chmod u+x benches/out/session_3.kk.out
 }
 
 run_session() {

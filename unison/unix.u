@@ -1,0 +1,5707 @@
+ability BasicIO where
+  echo : Text ->{BasicIO} ()
+
+basicIO : Request {BasicIO} a ->{IO, Exception} a
+basicIO = cases
+  { BasicIO.echo text -> resume } ->
+    putText stdOut text
+    handle resume() with basicIO
+  { result }                      -> result
+
+type Empty
+  =
+
+ability Status where
+  exit : Nat ->{Status} Empty
+
+exitHandler : Request {g, Status} a -> Nat
+exitHandler = cases
+  { result }                  -> 0
+  { Status.exit v -> resume } -> v
+
+type User
+  = Username Text
+
+ability Session where
+  su : Text ->{Session} ()
+  adduser : Text ->{Session} ()
+  setvar : Text -> Text ->{Session} ()
+  ask : Text ->{Session} Text
+
+whoami : '{Session} Text
+whoami _ = Session.ask "USER"
+
+env : User -> Request {Session} a ->{Error, State [(User, [(Text, Text)])]} a
+env user = cases
+  { result } -> result
+  { Session.ask var -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    val = lookupEnvVar var envs
+    handle resume val with env user
+  { Session.su user' -> resume } ->
+    if userExists (User.Username user') State.get() then
+      handle resume() with env (User.Username user')
+    else
+      Error.throw EType.NoSuchUser
+      handle resume() with env user
+  { Session.setvar var val -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    envs' = modifyEnvVar var val envs
+    State.put (modifyEnvs user envs' st)
+    handle resume() with env user
+  { Session.adduser user' -> resume } ->
+    st = State.get()
+    newuser = User.Username user'
+    newvars = [("USER", user')]
+    newenv = modifyEnvs newuser newvars st
+    if Boolean.not (userExists newuser st) then
+      State.put newenv
+      handle resume() with env newuser
+    else
+      Error.throw EType.UserExists
+      handle resume() with env user
+
+lookupEnvVar : Text -> [(Text, Text)] -> Text
+lookupEnvVar var = cases
+  [] -> ""
+  (var', val) +: rest ->
+    if var Text.== var' then val else lookupEnvVar var rest
+
+modifyEnvVar : Text -> Text -> [(Text, Text)] -> [(Text, Text)]
+modifyEnvVar var val = cases
+  [] -> [(var, val)]
+  (var', val') +: rest ->
+    if var Text.== var' then (var, val) List.+: rest
+    else (var', val') List.+: modifyEnvVar var val rest
+
+lookupEnvs : User -> [(User, [(Text, Text)])] -> [(Text, Text)]
+lookupEnvs user = cases
+  [] -> []
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then env
+    else lookupEnvs user rest
+
+modifyEnvs :
+  User
+  -> [(Text, Text)]
+  -> [(User, [(Text, Text)])]
+  -> [(User, [(Text, Text)])]
+modifyEnvs user env = cases
+  [] -> [(user, env)]
+  (user', env') +: rest ->
+    if userToText user Text.== userToText user' then (user, env) List.+: rest
+    else (user', env') List.+: modifyEnvs user env rest
+
+userExists : User -> [(User, [(Text, Text)])] -> Boolean
+userExists user = cases
+  [] -> false
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then true
+    else userExists user rest
+
+userToText : User -> Text
+userToText = cases User.Username username -> username
+
+initialUserspace : [(User, [(Text, Text)])]
+initialUserspace = [(User.Username "root", [("USER", "root")])]
+
+ability Interrupt where
+  interrupt : {Interrupt} ()
+
+type PState a e
+  = Paused ('{e} PState a e)
+  | Done a
+
+interruptWrite : Request {e, BasicIO} x ->{e, BasicIO, Co a} ()
+interruptWrite = cases
+  { BasicIO.echo text -> resume } ->
+    Co.uinterrupt
+    BasicIO.echo text
+    handle resume() with interruptWrite
+  { result }                      -> ()
+
+reifyProcess : Request {Interrupt, e} a -> PState a e
+reifyProcess = cases
+  { Interrupt.interrupt -> resume } ->
+    PState.Paused (_ -> (handle resume() with reifyProcess))
+  { result } -> PState.Done result
+
+ability TimeSharing where
+  fork : {TimeSharing} Boolean
+
+nondet : Request {TimeSharing} a -> [a]
+nondet = cases
+  { TimeSharing.fork -> resume } ->
+    (handle resume true with nondet) List.++ (handle resume false with nondet)
+  { result } -> [result]
+
+sched : [PState a {e, TimeSharing}] -> [a] ->{e} [a]
+sched ps done = match ps with
+  []                     -> done
+  PState.Done res +: ps' -> sched ps' (res List.+: done)
+  PState.Paused m +: ps' -> sched (ps' List.++ (handle m() with nondet)) done
+
+timeshare : '{g, Interrupt, TimeSharing} o ->{g} [o]
+timeshare m = sched [PState.Paused (_ -> (handle m() with reifyProcess))] []
+
+ability State a where
+  put : a ->{State a} ()
+  get : '{State a} a
+
+runState : a -> Request {State a} b -> (a, b)
+runState v = cases
+  { State.put v' -> resume } -> handle resume() with runState v'
+  { State.get () -> resume } -> handle resume v with runState v
+  { result }                 -> (v, result)
+
+type DirectoryT
+  = Directory (Text, Nat)
+
+type DataRegionT
+  = DataRegion (Nat, Text)
+
+type INodeT
+  = INode Nat Nat
+
+type IListT
+  = IList (Nat, INodeT)
+
+type FileSystemT
+  = FileSystem [DirectoryT] [IListT] [DataRegionT] Nat Nat
+
+initialINode : INodeT
+initialINode = INodeT.INode 0 0
+
+initialDirectory : DirectoryT
+initialDirectory = DirectoryT.Directory ("stdout", 0)
+
+initialDataRegion : DataRegionT
+initialDataRegion = DataRegionT.DataRegion (0, "")
+
+initialIList : IListT
+initialIList = IListT.IList (0, initialINode)
+
+initialFileSystem : FileSystemT
+initialFileSystem =
+  FileSystemT.FileSystem
+    [initialDirectory] [initialIList] [initialDataRegion] 1 1
+
+lookupINode : Nat -> [IListT] -> Either INodeT ()
+lookupINode i = cases
+  [] -> Right()
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then Left inode else lookupINode i rest
+
+lookupFName : Text -> [DirectoryT] -> Either Nat ()
+lookupFName name = cases
+  [] -> Right()
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then Left i else lookupFName name rest
+
+modifyINode : Nat -> INodeT -> [IListT] -> [IListT]
+modifyINode i inode = cases
+  [] -> []
+  IListT.IList (i', inode') +: rest ->
+    if i Nat.== i' then IListT.IList (i, inode) List.+: rest
+    else IListT.IList (i', inode') List.+: modifyINode i inode rest
+
+lookupDataRegion : Nat -> [DataRegionT] -> Either Text ()
+lookupDataRegion i = cases
+  [] -> Right()
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then Left text else lookupDataRegion i rest
+
+modifyDataRegion : Nat -> Text -> [DataRegionT] -> [DataRegionT]
+modifyDataRegion i text = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text') +: rest ->
+    if i Nat.== i' then DataRegionT.DataRegion (i, text) List.+: rest
+    else
+      DataRegionT.DataRegion (i', text') List.+: modifyDataRegion i text rest
+
+fread : Nat -> FileSystemT -> Either Text ()
+fread i = cases
+  FileSystemT.FileSystem directories ilists dataRegions _ _ ->
+    match lookupINode i ilists with
+      Left inode ->
+        (INodeT.INode _ dataRegion) = inode
+        match lookupDataRegion dataRegion dataRegions with
+          Left text -> Left text
+          Right ()  -> Right()
+      Right ()   -> Right()
+
+fwrite : Nat -> Text -> FileSystemT -> FileSystemT
+fwrite i text fs =
+  use FileSystemT FileSystem
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  match lookupINode i ilists with
+    Left inode ->
+      (INodeT.INode _ dataRegion) = inode
+      FileSystem
+        directories
+        ilists
+        (modifyDataRegion dataRegion text dataRegions)
+        dnext
+        inext
+    Right () -> fs
+
+ability FileRW where
+  write : (Nat, Text) ->{FileRW} ()
+  read : Nat ->{FileRW} Text
+
+fileRW : Request {FileRW} a ->{Error, State FileSystemT} a
+fileRW = cases
+  { FileRW.read i -> resume }          ->
+    fs = State.get()
+    text = fread i fs
+    match text with
+      Left text -> handle resume text with fileRW
+      Right ()  ->
+        Error.throw EType.FileNotFound
+        handle resume "" with fileRW
+  { FileRW.write (i, text) -> resume } ->
+    fs = State.get()
+    fs' = fwrite i text fs
+    State.put fs'
+    handle resume() with fileRW
+  { result }                           -> result
+
+fileEcho : Request {BasicIO} a ->{State FileSystemT} a
+fileEcho = cases
+  { BasicIO.echo text -> resume } ->
+    fs = State.get()
+    State.put (fwrite 0 text fs)
+    handle resume() with fileEcho
+  { result }                      -> result
+
+fopen : Text -> FileSystemT ->{Error} Nat
+fopen name = cases
+  FileSystemT.FileSystem directories ilists dataRegions dnext inext ->
+    match lookupFName name directories with
+      Left i   -> i
+      Right () ->
+        Error.throw EType.FileNotFound
+        inext
+
+has : Text -> [DirectoryT] -> Boolean
+has name = cases
+  [] -> false
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then true else has name rest
+
+fcreate : Text -> FileSystemT -> (Nat, FileSystemT)
+fcreate name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = fopen name fs
+    inode = lookupINode ino ilists
+    match inode with
+      Left inode ->
+        (INode _ loc) = inode
+        dreg' = modifyDataRegion loc "" dataRegions
+        (ino, FileSystem directories ilists dreg' dnext inext)
+      Right ()   -> (ino, fs)
+  else
+    dreg' = DataRegionT.DataRegion (dnext, "") +: dataRegions
+    inext' = inext + 1
+    dnext' = dnext + 1
+    inode = INode 1 dnext
+    ilists' = IListT.IList (inext, inode) +: ilists
+    directories' = DirectoryT.Directory (name, inext) +: directories
+    (inext, FileSystem directories' ilists' dreg' dnext' inext')
+
+ability FileCO where
+  create : Text ->{FileCO} Nat
+  open : Text ->{FileCO} Nat
+
+fileCO : Request {FileCO} a ->{Error, State FileSystemT} a
+fileCO = cases
+  { FileCO.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO
+  { FileCO.open name -> resume }   ->
+    fs = State.get()
+    ino = fopen name fs
+    State.put fs
+    handle resume ino with fileCO
+  { result }                       -> result
+
+flink : Text -> Text -> FileSystemT ->{Error} FileSystemT
+flink src dest fs =
+  use Error throw
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has dest directories then fs
+  else
+    ino = lookupFName src directories
+    match ino with
+      Left ino ->
+        directories' = DirectoryT.Directory (dest, ino) +: directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            inode' = INode (ino + 1) loc
+            ilists' = modifyINode ino inode' ilists
+            FileSystem directories' ilists' dataRegions dnext inext
+          Right ()   ->
+            throw EType.FileExists
+            fs
+      Right () ->
+        throw EType.FileNotFound
+        fs
+
+removeINode : Nat -> [IListT] -> [IListT]
+removeINode i = cases
+  [] -> []
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then rest
+    else IListT.IList (i', inode) List.+: removeINode i rest
+
+removeDataRegion : Nat -> [DataRegionT] -> [DataRegionT]
+removeDataRegion i = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then rest
+    else DataRegionT.DataRegion (i', text) List.+: removeDataRegion i rest
+
+removeDirectory : Text -> [DirectoryT] -> [DirectoryT]
+removeDirectory name = cases
+  [] -> []
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then rest
+    else DirectoryT.Directory (name', i) List.+: removeDirectory name rest
+
+funlink : Text -> FileSystemT -> FileSystemT
+funlink name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use Nat - >
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = lookupFName name directories
+    match ino with
+      Left ino ->
+        directories' = removeDirectory name directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            if loc > 1 then
+              loc' = loc - 1
+              inode' = INode ino loc'
+              ilists' = modifyINode ino inode' ilists
+              FileSystem directories' ilists' dataRegions dnext inext
+            else
+              ilists' = removeINode ino ilists
+              dataRegions' = removeDataRegion loc dataRegions
+              FileSystem directories' ilists' dataRegions' dnext inext
+          Right ()   -> fs
+      Right () -> fs
+  else fs
+
+ability FileLU where
+  unlink : Text ->{FileLU} ()
+  link : (Text, Text) ->{FileLU} ()
+
+fileLU : Request {FileLU} a ->{Error, FileRW, State FileSystemT} a
+fileLU = cases
+  { FileLU.link (src, dest) -> resume } ->
+    fs = State.get()
+    fs' = flink src dest fs
+    State.put fs'
+    handle resume() with fileLU
+  { FileLU.unlink name -> resume }      ->
+    fs = State.get()
+    fs' = funlink name fs
+    State.put fs'
+    handle resume() with fileLU
+  { result }                            -> result
+
+fileIO m = handle handle handle m() with fileRW with fileCO with fileLU
+
+ability Await a where
+  await : '{Await a} a
+
+ability Yield b where
+  yield : b ->{Yield b} ()
+
+pipe : '{e, Yield b} a -> '{e, Await b} a ->{e} a
+pipe p c =
+  handle c()
+  with cases
+    { x }                        -> x
+    { Await.await () -> resume } -> copipe resume p
+
+copipe : (b ->{e, Await b} a) -> '{e, Yield b} a ->{e} a
+copipe c p =
+  handle p()
+  with cases
+    { x }                       -> x
+    { Yield.yield y -> resume } -> pipe resume do c y
+
+ability Co a where
+  ufork : {Co a} Nat
+  renice : Nat -> Int ->{Co a} ()
+  wait : Nat ->{Co a} ()
+  getResult : Nat ->{Co a} Optional a
+  nice : Nat ->{Co a} Int
+  uinterrupt : {Co a} ()
+
+type Proc a e
+  = Proc (Sstate a e ->{e} [(Nat, a)])
+
+type Pstate a e
+  = Blocked Nat (Proc a e)
+  | Ready (Proc a e)
+
+type Sstate a e
+  = { q : [(Nat, Pstate a e)], done : [(Nat, a)], pid : Nat, pnext : Nat }
+
+runNext : Sstate a e ->{e} [(Nat, a)]
+runNext = cases
+  Sstate.Sstate q done pid pnext ->
+    match q with
+      [] -> done
+      (pid', Pstate.Blocked pid'' resume) +: q' ->
+        runNext
+          (Sstate.Sstate
+            (q' List.++ [(pid', Pstate.Blocked pid'' resume)]) done pid pnext)
+      (pid', Pstate.Ready resume) +: q' ->
+        st' = Sstate.Sstate q' done pid' pnext
+        let
+          (Proc.Proc resume') = resume
+          resume' st'
+
+lookupResult : Nat -> [(Nat, a)] -> Optional a
+lookupResult pid = cases
+  [] -> None
+  (pid', result) +: rest ->
+    if pid Nat.== pid' then Some result else lookupResult pid rest
+
+modifyQueue : Nat -> [(Nat, Pstate a e)] -> [(Nat, Pstate a e)]
+modifyQueue pid = cases
+  [] -> []
+  (pid', pstate) +: rest ->
+    if pid Nat.== pid' then rest
+    else (pid', pstate) List.+: modifyQueue pid rest
+
+lookupNice : Nat -> [(Nat, Int)] -> Int
+lookupNice pid = cases
+  [] -> -1
+  (pid', renice) +: rest ->
+    if pid' Nat.== pid then renice else lookupNice pid rest
+
+modifyNice : Nat -> Int -> [(Nat, Int)] -> [(Nat, Int)]
+modifyNice pid renice = cases
+  [] -> [(pid, renice)]
+  (pid', renice') +: rest ->
+    if pid' Nat.== pid then (pid, renice) List.+: rest
+    else (pid', renice') List.+: modifyNice pid renice rest
+
+lowestNiceInQueue :
+  [(Nat, Int)] -> [(Nat, Pstate a e)] -> Either (Nat, Pstate a e) ()
+lowestNiceInQueue niceValues = cases
+  [] -> Right()
+  (pid, Pstate.Blocked pid' resume) +: rest ->
+    lowestNiceInQueue niceValues rest
+  (pid, Pstate.Ready resume) +: rest ->
+    use Int <
+    use Pstate Ready
+    nextnice = lookupNice pid niceValues
+    match lowestNiceInQueue niceValues rest with
+      Left (pid', pstate) ->
+        nextnice' = lookupNice pid' niceValues
+        if nextnice < nextnice' then Left (pid, Ready resume)
+        else Left (pid', pstate)
+      Right () -> Left (pid, Ready resume)
+
+runNextNice : Sstate a e -> [(Nat, Int)] ->{e} [(Nat, a)]
+runNextNice st niceValues =
+  use List ++
+  use Proc Proc
+  use Pstate Blocked Ready
+  use Sstate Sstate
+  (Sstate q done pid pnext) = st
+  match q with
+    [] -> done
+    (pid', Blocked pid'' resume) +: q' ->
+      runNextNice
+        (Sstate (q' ++ [(pid', Blocked pid'' resume)]) done pid pnext)
+        niceValues
+    (pid', Ready resume) +: q' ->
+      match lowestNiceInQueue niceValues q with
+        Left (pid', Ready resume)         ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Left (pid', Blocked pid'' resume) ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Right ()                          ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+
+minNice : Int
+minNice = -20
+
+schedAging :
+  Sstate a e -> Request {Co a, e} a ->{e, State [(Nat, Int)]} [(Nat, a)]
+schedAging st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNextNice (Sstate.Sstate q done' pid pnext) State.get()
+  { Co.ufork -> resume } ->
+    use Int - <=
+    use List ++
+    use Nat +
+    use Pstate Ready
+    use Sstate Sstate
+    use State get put
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      nicevalue = lookupNice pid get()
+      if nicevalue - +1 <= minNice then
+        q' = q ++ [(pid, Ready resume')]
+        pid' = pnext
+        pnext' = pnext + 1
+        handle resume pid' with scheduler (Sstate q' done pid pnext')
+      else
+        put (modifyNice pnext nicevalue get())
+        put (modifyNice pnext (nicevalue - +1) get())
+        pid' = pnext
+        pnext' = pnext + 1
+        q' = q ++ [(pid', Ready resume')]
+        handle resume pid' with schedAging (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } ->
+    (Sstate.Sstate q done pid pnext) = st
+    nicevalue = lookupNice pid State.get()
+    handle resume nicevalue with schedAging st
+  { Co.renice pid newNice -> resume } ->
+    use Sstate Sstate
+    use State get
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      State.put (modifyNice pid newNice get())
+      runNextNice (Sstate q done pid pnext) get()
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+scheduler : Sstate a e -> Request {Co a, e} a ->{e} [(Nat, a)]
+scheduler st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNext (Sstate.Sstate q done' pid pnext)
+  { Co.ufork -> resume } ->
+    use List ++
+    use Nat +
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      pid' = pnext
+      pnext' = pnext + 1
+      q' = q ++ [(pid', Pstate.Ready resume')]
+      handle resume pid' with scheduler (Sstate q' done pid pnext')
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } -> handle resume +0 with scheduler st
+  { Co.renice pid newNice -> resume } -> handle resume() with scheduler st
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+processExists : Nat -> [(Nat, Pstate a e)] -> Boolean
+processExists pid = cases
+  [] -> false
+  (pid', process) +: rest ->
+    if pid Nat.== pid' then true else processExists pid rest
+
+timeshare2 : '{g, Co a} a ->{g} [(Nat, a)]
+timeshare2 m = handle m() with scheduler (Sstate.Sstate [] [] 1 2)
+
+init : '{e} a ->{e, Co a} ()
+init main =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then
+    a = main()
+    ()
+  else Co.wait pid
+
+type Permission
+  = Read
+  | Write
+  | AddUser
+  | Grant
+  | Revoke
+  | Execute
+
+all : [Permission]
+all =
+  [ Permission.Read
+  , Permission.Write
+  , Permission.AddUser
+  , Permission.Grant
+  , Permission.Revoke
+  , Permission.Execute
+  ]
+
+ability Permit where
+  grant : Text -> Permission ->{Permit} ()
+  revoke : Text -> Permission ->{Permit} ()
+
+checkPermission :
+  User -> Permission -> [(Text, [Permission])] ->{IO, Exception, Error} ()
+checkPermission user required = cases
+  [] -> Error.throw EType.PermissionDenied
+  (user', perms') +: rest ->
+    if userToText user Text.== user' then
+      if allowed required perms' then ()
+      else Error.throw EType.PermissionDenied
+    else checkPermission user required rest
+
+permissions :
+  User
+  -> Request {e, Permit, Session, FileRW, FileLU, FileCO, Co a} a
+  ->{e,
+  IO,
+  Exception,
+  Session,
+  Error,
+  FileRW,
+  FileLU,
+  FileCO,
+  Co a,
+  State [(Text, [Permission])]} a
+permissions user = cases
+  { Permit.grant user' perm -> resume }  ->
+    use List +:
+    use State get
+    checkPermission user Permission.Grant get()
+    existingPerms = lookupPermission user' get()
+    newPerms = perm +: existingPerms
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Permit.revoke user' perm -> resume } ->
+    use State get
+    checkPermission user Permission.Revoke get()
+    newPerms = removePermission perm (lookupPermission user' get())
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Session.ask var -> resume }          ->
+    checkPermission user Permission.Read State.get()
+    answer = Session.ask var
+    handle resume answer with permissions user
+  { Session.su user' -> resume }         ->
+    Session.su user'
+    handle resume() with permissions (User.Username user')
+  { Session.adduser user' -> resume }    ->
+    checkPermission user Permission.AddUser State.get()
+    Session.adduser user'
+    handle resume() with permissions user
+  { Session.setvar var val -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    Session.setvar var val
+    handle resume() with permissions user
+  { FileRW.read i -> resume }            ->
+    checkPermission user Permission.Read State.get()
+    text = FileRW.read i
+    handle resume text with permissions user
+  { FileRW.write (i, text) -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    FileRW.write (i, text)
+    handle resume() with permissions user
+  { FileLU.link (src, dest) -> resume }  ->
+    checkPermission user Permission.Write State.get()
+    FileLU.link (src, dest)
+    handle resume() with permissions user
+  { FileLU.unlink name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    FileLU.unlink name
+    handle resume() with permissions user
+  { FileCO.create name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    ino = FileCO.create name
+    handle resume ino with permissions user
+  { FileCO.open name -> resume }         ->
+    checkPermission user Permission.Read State.get()
+    ino = FileCO.open name
+    handle resume ino with permissions user
+  { Co.ufork -> resume }                 ->
+    checkPermission user Permission.Execute State.get()
+    pid = Co.ufork
+    handle resume pid with permissions user
+  { Co.nice pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    nicevalue = Co.nice pid
+    handle resume nicevalue with permissions user
+  { Co.renice pid newnice -> resume }    ->
+    checkPermission user Permission.Execute State.get()
+    Co.renice pid newnice
+    handle resume() with permissions user
+  { Co.wait pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    Co.wait pid
+    handle resume() with permissions user
+  { Co.uinterrupt -> resume }            ->
+    checkPermission user Permission.Execute State.get()
+    Co.uinterrupt
+    handle resume() with permissions user
+  { Co.getResult pid -> resume }         ->
+    checkPermission user Permission.Execute State.get()
+    result = Co.getResult pid
+    handle resume result with permissions user
+  { result }                             -> result
+
+lookupPermission : Text -> [(Text, [Permission])] -> [Permission]
+lookupPermission var = cases
+  [] -> []
+  (var', perms') +: rest ->
+    if var Text.== var' then perms' else lookupPermission var rest
+
+modifyPermission :
+  Text -> [Permission] -> [(Text, [Permission])] -> [(Text, [Permission])]
+modifyPermission var perms = cases
+  [] -> [(var, perms)]
+  (var', perms'') +: rest ->
+    if var Text.== var' then (var, perms) List.+: rest
+    else (var', perms'') List.+: modifyPermission var perms rest
+
+removePermission : Permission -> [Permission] -> [Permission]
+removePermission perm = cases
+  [] -> []
+  perm' +: rest ->
+    if permEquals perm perm' then rest
+    else perm' List.+: removePermission perm rest
+
+allowed : Permission -> [Permission] -> Boolean
+allowed perm = cases
+  []            -> false
+  perm' +: rest -> if permEquals perm perm' then true else allowed perm rest
+
+permEquals : Permission -> Permission -> Boolean
+permEquals perms1 perms2 = match perms1 with
+  Permission.Read    ->
+    match perms2 with
+      Permission.Read -> true
+      _               -> false
+  Permission.Write   ->
+    match perms2 with
+      Permission.Write -> true
+      _                -> false
+  Permission.AddUser ->
+    match perms2 with
+      Permission.AddUser -> true
+      _                  -> false
+  Permission.Grant   ->
+    match perms2 with
+      Permission.Grant -> true
+      _                -> false
+  Permission.Revoke  ->
+    match perms2 with
+      Permission.Revoke -> true
+      _                 -> false
+  Permission.Execute ->
+    match perms2 with
+      Permission.Execute -> true
+      _                  -> false
+
+initialPermissions : [(Text, [Permission])]
+initialPermissions = [("root", all)]
+
+type EType
+  = PermissionDenied
+  | FileNotFound
+  | FileExists
+  | UserExists
+  | NoSuchUser
+  | UnknownError
+
+toText : EType -> Text
+toText = cases
+  EType.PermissionDenied -> "Permission denied"
+  EType.FileNotFound     -> "File not found"
+  EType.FileExists       -> "File exists"
+  EType.UserExists       -> "User exists"
+  EType.NoSuchUser       -> "No such user"
+  EType.UnknownError     -> "Unknown error"
+
+ability Error where
+  throw : EType ->{Error} ()
+
+fail : Request {e, Error} a ->{e, IO, Exception, Status} Empty
+fail = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    Status.exit 1
+  { result }                    -> Status.exit 0
+
+warn : Request {e, Error} a ->{e, IO, Exception} a
+warn = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    handle resume() with warn
+  { result }                    -> result
+
+nondet2 : Request {TimeSharing} a -> [a]
+nondet2 = cases
+  { TimeSharing.fork -> resume } ->
+    use Nat !=
+    pid = Co.ufork
+    handle resume (pid != 0) with nondet2
+  { result }                     -> [result]
+
+unix :
+  '{e, Session, Error, FileRW, FileLU, FileCO, BasicIO, Co a} a
+  ->{e, IO, Exception} [(Nat, Nat)]
+unix m =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle
+                handle
+                  handle
+                    handle handle m with env (User.Username "root")
+                    with runState initialUserspace
+                  with fileCO
+                with fileLU
+              with fileRW
+            with runState initialFileSystem
+          with interruptWrite
+        with basicIO
+      with warn
+    with exitHandler
+  with scheduler (Sstate.Sstate [] [] 1 2)
+
+cat : Text ->{FileRW, FileCO, BasicIO} ()
+cat name = BasicIO.echo (FileRW.read (FileCO.open name))
+
+catTest : ∀ _. _ ->{FileRW, FileCO, BasicIO} ()
+catTest _ =
+  FileRW.write (FileCO.open "test.txt", "Hello, World!")
+  cat "test.txt"
+
+envVariables : ∀ _. _ ->{Session, BasicIO} ()
+envVariables _ =
+  use BasicIO echo
+  use Session adduser ask su
+  echo whoami()
+  echo "\n"
+  adduser "alice"
+  su "alice"
+  echo (ask "HOME")
+  echo "\n"
+  adduser "bob"
+  adduser "bob"
+  su "bob"
+  echo (ask "HOME")
+
+envVariablesTest : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+envVariablesTest _ = unix envVariables
+
+hamlet : ∀ _. _ ->{BasicIO} ()
+hamlet _ =
+  use BasicIO echo
+  echo "To be, or not to be,\n"
+  echo "that is the question:\n"
+  echo "Wether 'tis nobler in the mind to suffer\n"
+
+multiHandlers : ∀ _. _ ->{BasicIO} ()
+multiHandlers _ =
+  use BasicIO echo
+  echo "Hello,"
+  echo " World!\n"
+
+proc : ∀ _ a. _ ->{Session, BasicIO, Co a} ()
+proc _ =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then ritchie()
+  else
+    Session.su "bob"
+    Co.wait pid
+    hamlet()
+
+ritchie : ∀ _. _ ->{BasicIO} ()
+ritchie _ =
+  use BasicIO echo
+  echo "UNIX is basically\n"
+  echo "a simple operating system\n"
+  echo "but you have to be a genius to understand the simplicity\n"
+
+runCat : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runCat _ = unix catTest
+
+runMultiHandlers : ∀ _. _ ->{IO, Exception} ()
+runMultiHandlers _ = handle multiHandlers() with basicIO
+
+runProc : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runProc _ = unix proc
+
+testMv : '{FileRW, FileCO, BasicIO, State FileSystemT} ()
+testMv _ =
+  use BasicIO echo
+  use FileCO open
+  _ = FileRW.write (open "test.txt", "Hello, World!")
+  mv "test.txt" "test2.txt"
+  echo (FileRW.read (open "test2.txt"))
+  echo "\n"
+
+chainSwitch : Nat ->{IO, Exception, Session} ()
+chainSwitch n =
+  use Nat - <=
+  use Session su
+  if n <= 0 then ()
+  else
+    match whoami() with
+      "root"  -> su "alice"
+      "alice" -> su "bob"
+      "bob"   -> su "root"
+      _       -> printLine "Unknown user"
+    chainSwitch (n - 1)
+
+chainSwitchArg : ∀ _. _ ->{IO, Exception, Session} ()
+chainSwitchArg _ = chainSwitch parseArgs()
+
+extractResult : Nat ->{Co a} a
+extractResult pid = match Co.getResult pid with
+  None   ->
+    Co.wait pid
+    extractResult pid
+  Some x -> x
+
+fib : Nat ->{Co Nat} Nat
+fib n =
+  match n with
+    0 -> 1
+    1 -> 1
+    _ ->
+      use Co ufork
+      use Nat + - ==
+      pid1 = ufork
+      if pid1 == 0 then fib (n - 1)
+      else
+        pid2 = ufork
+        if pid2 == 0 then fib (n - 2)
+        else extractResult pid2 + extractResult pid1
+
+fib10 : ∀ _. _ ->{Co Nat} Nat
+fib10 _ = fib 18
+
+fibArg : ∀ _. _ ->{IO, Exception, Co Nat} Nat
+fibArg _ = fib parseArgs()
+
+fib_memo :
+  Nat ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memo n =
+  use Co ufork
+  use FileRW read
+  use Nat + - ==
+  use Status exit
+  use Text ++
+  file = "fib" ++ Nat.toText n ++ ".txt"
+  match FileCO2.open file with
+    None     ->
+      match n with
+        0 ->
+          memoize file 0
+          exit 0
+        1 ->
+          memoize file 1
+          exit 1
+        _ ->
+          pid1 = ufork
+          if pid1 == 0 then fib_memo (n - 1)
+          else
+            pid2 = ufork
+            if pid2 == 0 then fib_memo (n - 2)
+            else
+              Co.uinterrupt
+              result = extractResult pid2 + extractResult pid1
+              memoize file result
+              exit result
+    Some ino ->
+      result = unwrap (Nat.fromText (read ino))
+      printLine (read ino)
+      exit result
+
+fib_memoArg :
+  ∀ _. _ ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memoArg _ = fib_memo parseArgs()
+
+fileCO2 : Request {FileCO2} a ->{Error, State FileSystemT} a
+fileCO2 = cases
+  { FileCO2.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO2
+  { FileCO2.open name -> resume }   ->
+    fs = State.get()
+    ino = handle Some (fopen name fs) with withDefault None
+    State.put fs
+    handle resume ino with fileCO2
+  { result }                        -> result
+
+fileMayhem : Nat ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhem = cases
+  0 -> ()
+  n ->
+    use FileCO2 create open
+    use FileLU unlink
+    use FileRW write
+    use Nat -
+    use Text ++
+    n' = Nat.toText n
+    name = "file" ++ n'
+    _ = create name
+    inum1 = unwrap (open name)
+    write (inum1, n')
+    middle = "mid"
+    FileLU.link (name, middle)
+    end = "end"
+    _ = create end
+    inum2 = unwrap (open middle)
+    txt = FileRW.read inum2
+    inum3 = unwrap (open end)
+    write (inum3, txt)
+    unlink middle
+    unlink name
+    fileMayhem (n - 1)
+
+fileMayhemArg : ∀ _. _ ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhemArg _ = fileMayhem parseArgs()
+
+initdaniel : [(User, [(Text, Text)])]
+initdaniel =
+  use User Username
+  [ (Username "root", [("USER", "root")])
+  , (Username "alice", [("USER", "alice")])
+  , (Username "bob", [("USER", "bob")])
+  ]
+
+memoize : Text -> Nat ->{Exception, Session, FileRW, FileCO2} ()
+memoize file result =
+  use Session su
+  su "root"
+  ino = FileCO2.create file
+  FileRW.write (ino, Nat.toText result)
+  su "alice"
+
+mv : Text -> Text ->{FileRW, FileCO, BasicIO, State FileSystemT} ()
+mv src dest =
+  use FileCO create
+  file = FileRW.read (FileCO.open src)
+  _ = create src
+  FileRW.write (create dest, file)
+
+runChainSwitch _ =
+  handle
+    handle handle chainSwitchArg() with env (User.Username "root")
+    with runState initdaniel
+  with warn
+
+runFib : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runFib _ = timeshare2 fibArg
+
+runFib_memo _ =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle handle fib_memoArg() with exitHandler
+              with scheduler (Sstate.Sstate [] [] 1 2)
+            with env (User.Username "root")
+          with runState initdaniel
+        with fileRW
+      with fileCO2
+    with runState initialFileSystem
+  with warn
+
+withDefault : a -> Request {Error, e} a ->{e} a
+withDefault default = cases
+  { result }             -> result
+  { Error.throw _ -> _ } -> default
+
+runFileMayhem _ =
+  handle
+    handle
+      handle handle handle fileMayhemArg() with fileCO with fileLU with fileRW
+    with warn
+  with runState initialFileSystem
+
+-- The definitions below no longer typecheck with the changes above.
+-- Please fix the errors and try `update` again.
+
+runTestMv _ =
+  handle
+    handle handle handle handle testMv() with basicIO with fileCO with fileRW
+    with runState initialFileSystem
+  with warn
+
+
+
+---- Anything below this line is ignored by Unison.
+
+
+ability BasicIO where
+  echo : Text ->{BasicIO} ()
+
+basicIO : Request {BasicIO} a ->{IO, Exception} a
+basicIO = cases
+  { BasicIO.echo text -> resume } ->
+    putText stdOut text
+    handle resume() with basicIO
+  { result }                      -> result
+
+type Empty
+  =
+
+ability Status where
+  exit : Nat ->{Status} Empty
+
+exitHandler : Request {g, Status} a -> Nat
+exitHandler = cases
+  { result }                  -> 0
+  { Status.exit v -> resume } -> v
+
+type User
+  = Username Text
+
+ability Session where
+  su : Text ->{Session} ()
+  adduser : Text ->{Session} ()
+  setvar : Text -> Text ->{Session} ()
+  ask : Text ->{Session} Text
+
+whoami : '{Session} Text
+whoami _ = Session.ask "USER"
+
+env : User -> Request {Session} a ->{Error, State [(User, [(Text, Text)])]} a
+env user = cases
+  { result } -> result
+  { Session.ask var -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    val = lookupEnvVar var envs
+    handle resume val with env user
+  { Session.su user' -> resume } ->
+    if userExists (User.Username user') State.get() then
+      handle resume() with env (User.Username user')
+    else
+      Error.throw EType.NoSuchUser
+      handle resume() with env user
+  { Session.setvar var val -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    envs' = modifyEnvVar var val envs
+    State.put (modifyEnvs user envs' st)
+    handle resume() with env user
+  { Session.adduser user' -> resume } ->
+    st = State.get()
+    newuser = User.Username user'
+    newvars = [("USER", user')]
+    newenv = modifyEnvs newuser newvars st
+    if Boolean.not (userExists newuser st) then
+      State.put newenv
+      handle resume() with env newuser
+    else
+      Error.throw EType.UserExists
+      handle resume() with env user
+
+lookupEnvVar : Text -> [(Text, Text)] -> Text
+lookupEnvVar var = cases
+  [] -> ""
+  (var', val) +: rest ->
+    if var Text.== var' then val else lookupEnvVar var rest
+
+modifyEnvVar : Text -> Text -> [(Text, Text)] -> [(Text, Text)]
+modifyEnvVar var val = cases
+  [] -> [(var, val)]
+  (var', val') +: rest ->
+    if var Text.== var' then (var, val) List.+: rest
+    else (var', val') List.+: modifyEnvVar var val rest
+
+lookupEnvs : User -> [(User, [(Text, Text)])] -> [(Text, Text)]
+lookupEnvs user = cases
+  [] -> []
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then env
+    else lookupEnvs user rest
+
+modifyEnvs :
+  User
+  -> [(Text, Text)]
+  -> [(User, [(Text, Text)])]
+  -> [(User, [(Text, Text)])]
+modifyEnvs user env = cases
+  [] -> [(user, env)]
+  (user', env') +: rest ->
+    if userToText user Text.== userToText user' then (user, env) List.+: rest
+    else (user', env') List.+: modifyEnvs user env rest
+
+userExists : User -> [(User, [(Text, Text)])] -> Boolean
+userExists user = cases
+  [] -> false
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then true
+    else userExists user rest
+
+userToText : User -> Text
+userToText = cases User.Username username -> username
+
+initialUserspace : [(User, [(Text, Text)])]
+initialUserspace = [(User.Username "root", [("USER", "root")])]
+
+ability Interrupt where
+  interrupt : {Interrupt} ()
+
+type PState a e
+  = Paused ('{e} PState a e)
+  | Done a
+
+interruptWrite : Request {e, BasicIO} x ->{e, BasicIO, Co a} ()
+interruptWrite = cases
+  { BasicIO.echo text -> resume } ->
+    Co.uinterrupt
+    BasicIO.echo text
+    handle resume() with interruptWrite
+  { result }                      -> ()
+
+reifyProcess : Request {Interrupt, e} a -> PState a e
+reifyProcess = cases
+  { Interrupt.interrupt -> resume } ->
+    PState.Paused (_ -> (handle resume() with reifyProcess))
+  { result } -> PState.Done result
+
+ability TimeSharing where
+  fork : {TimeSharing} Boolean
+
+nondet : Request {TimeSharing} a -> [a]
+nondet = cases
+  { TimeSharing.fork -> resume } ->
+    (handle resume true with nondet) List.++ (handle resume false with nondet)
+  { result } -> [result]
+
+sched : [PState a {e, TimeSharing}] -> [a] ->{e} [a]
+sched ps done = match ps with
+  []                     -> done
+  PState.Done res +: ps' -> sched ps' (res List.+: done)
+  PState.Paused m +: ps' -> sched (ps' List.++ (handle m() with nondet)) done
+
+timeshare : '{g, Interrupt, TimeSharing} o ->{g} [o]
+timeshare m = sched [PState.Paused (_ -> (handle m() with reifyProcess))] []
+
+ability State a where
+  put : a ->{State a} ()
+  get : '{State a} a
+
+runState : a -> Request {State a} b -> (a, b)
+runState v = cases
+  { State.put v' -> resume } -> handle resume() with runState v'
+  { State.get () -> resume } -> handle resume v with runState v
+  { result }                 -> (v, result)
+
+type DirectoryT
+  = Directory (Text, Nat)
+
+type DataRegionT
+  = DataRegion (Nat, Text)
+
+type INodeT
+  = INode Nat Nat
+
+type IListT
+  = IList (Nat, INodeT)
+
+type FileSystemT
+  = FileSystem [DirectoryT] [IListT] [DataRegionT] Nat Nat
+
+initialINode : INodeT
+initialINode = INodeT.INode 0 0
+
+initialDirectory : DirectoryT
+initialDirectory = DirectoryT.Directory ("stdout", 0)
+
+initialDataRegion : DataRegionT
+initialDataRegion = DataRegionT.DataRegion (0, "")
+
+initialIList : IListT
+initialIList = IListT.IList (0, initialINode)
+
+initialFileSystem : FileSystemT
+initialFileSystem =
+  FileSystemT.FileSystem
+    [initialDirectory] [initialIList] [initialDataRegion] 1 1
+
+lookupINode : Nat -> [IListT] -> Either INodeT ()
+lookupINode i = cases
+  [] -> Right()
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then Left inode else lookupINode i rest
+
+lookupFName : Text -> [DirectoryT] -> Either Nat ()
+lookupFName name = cases
+  [] -> Right()
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then Left i else lookupFName name rest
+
+modifyINode : Nat -> INodeT -> [IListT] -> [IListT]
+modifyINode i inode = cases
+  [] -> []
+  IListT.IList (i', inode') +: rest ->
+    if i Nat.== i' then IListT.IList (i, inode) List.+: rest
+    else IListT.IList (i', inode') List.+: modifyINode i inode rest
+
+lookupDataRegion : Nat -> [DataRegionT] -> Either Text ()
+lookupDataRegion i = cases
+  [] -> Right()
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then Left text else lookupDataRegion i rest
+
+modifyDataRegion : Nat -> Text -> [DataRegionT] -> [DataRegionT]
+modifyDataRegion i text = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text') +: rest ->
+    if i Nat.== i' then DataRegionT.DataRegion (i, text) List.+: rest
+    else
+      DataRegionT.DataRegion (i', text') List.+: modifyDataRegion i text rest
+
+fread : Nat -> FileSystemT -> Either Text ()
+fread i = cases
+  FileSystemT.FileSystem directories ilists dataRegions _ _ ->
+    match lookupINode i ilists with
+      Left inode ->
+        (INodeT.INode _ dataRegion) = inode
+        match lookupDataRegion dataRegion dataRegions with
+          Left text -> Left text
+          Right ()  -> Right()
+      Right ()   -> Right()
+
+fwrite : Nat -> Text -> FileSystemT -> FileSystemT
+fwrite i text fs =
+  use FileSystemT FileSystem
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  match lookupINode i ilists with
+    Left inode ->
+      (INodeT.INode _ dataRegion) = inode
+      FileSystem
+        directories
+        ilists
+        (modifyDataRegion dataRegion text dataRegions)
+        dnext
+        inext
+    Right () -> fs
+
+ability FileRW where
+  write : (Nat, Text) ->{FileRW} ()
+  read : Nat ->{FileRW} Text
+
+fileRW : Request {FileRW} a ->{Error, State FileSystemT} a
+fileRW = cases
+  { FileRW.read i -> resume }          ->
+    fs = State.get()
+    text = fread i fs
+    match text with
+      Left text -> handle resume text with fileRW
+      Right ()  ->
+        Error.throw EType.FileNotFound
+        handle resume "" with fileRW
+  { FileRW.write (i, text) -> resume } ->
+    fs = State.get()
+    fs' = fwrite i text fs
+    State.put fs'
+    handle resume() with fileRW
+  { result }                           -> result
+
+fileEcho : Request {BasicIO} a ->{State FileSystemT} a
+fileEcho = cases
+  { BasicIO.echo text -> resume } ->
+    fs = State.get()
+    State.put (fwrite 0 text fs)
+    handle resume() with fileEcho
+  { result }                      -> result
+
+fopen : Text -> FileSystemT ->{Error} Nat
+fopen name = cases
+  FileSystemT.FileSystem directories ilists dataRegions dnext inext ->
+    match lookupFName name directories with
+      Left i   -> i
+      Right () ->
+        Error.throw EType.FileNotFound
+        inext
+
+has : Text -> [DirectoryT] -> Boolean
+has name = cases
+  [] -> false
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then true else has name rest
+
+fcreate : Text -> FileSystemT -> (Nat, FileSystemT)
+fcreate name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = fopen name fs
+    inode = lookupINode ino ilists
+    match inode with
+      Left inode ->
+        (INode ino loc) = inode
+        dreg' = modifyDataRegion loc "" dataRegions
+        (ino, FileSystem directories ilists dreg' dnext inext)
+      Right ()   -> (ino, fs)
+  else
+    dreg' = DataRegionT.DataRegion (dnext, "") +: dataRegions
+    inext' = inext + 1
+    dnext' = dnext + 1
+    inode = INode 1 dnext
+    ilists' = IListT.IList (inext, inode) +: ilists
+    directories' = DirectoryT.Directory (name, inext) +: directories
+    (inext, FileSystem directories' ilists' dreg' dnext' inext')
+
+ability FileCO where
+  create : Text ->{FileCO} Nat
+  open : Text ->{FileCO} Nat
+
+fileCO : Request {FileCO} a ->{Error, State FileSystemT} a
+fileCO = cases
+  { FileCO.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO
+  { FileCO.open name -> resume }   ->
+    fs = State.get()
+    ino = fopen name fs
+    State.put fs
+    handle resume ino with fileCO
+  { result }                       -> result
+
+flink : Text -> Text -> FileSystemT ->{Error} FileSystemT
+flink src dest fs =
+  use Error throw
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has dest directories then fs
+  else
+    ino = lookupFName src directories
+    match ino with
+      Left ino ->
+        directories' = DirectoryT.Directory (dest, ino) +: directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            inode' = INode (ino + 1) loc
+            ilists' = modifyINode ino inode' ilists
+            FileSystem directories' ilists' dataRegions dnext inext
+          Right ()   ->
+            throw EType.FileExists
+            fs
+      Right () ->
+        throw EType.FileNotFound
+        fs
+
+removeINode : Nat -> [IListT] -> [IListT]
+removeINode i = cases
+  [] -> []
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then rest
+    else IListT.IList (i', inode) List.+: removeINode i rest
+
+removeDataRegion : Nat -> [DataRegionT] -> [DataRegionT]
+removeDataRegion i = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then rest
+    else DataRegionT.DataRegion (i', text) List.+: removeDataRegion i rest
+
+removeDirectory : Text -> [DirectoryT] -> [DirectoryT]
+removeDirectory name = cases
+  [] -> []
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then rest
+    else DirectoryT.Directory (name', i) List.+: removeDirectory name rest
+
+funlink : Text -> FileSystemT -> FileSystemT
+funlink name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use Nat - >
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = lookupFName name directories
+    match ino with
+      Left ino ->
+        directories' = removeDirectory name directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            if loc > 1 then
+              loc' = loc - 1
+              inode' = INode ino loc'
+              ilists' = modifyINode ino inode' ilists
+              FileSystem directories' ilists' dataRegions dnext inext
+            else
+              ilists' = removeINode ino ilists
+              dataRegions' = removeDataRegion loc dataRegions
+              FileSystem directories' ilists' dataRegions' dnext inext
+          Right ()   -> fs
+      Right () -> fs
+  else fs
+
+ability FileLU where
+  unlink : Text ->{FileLU} ()
+  link : (Text, Text) ->{FileLU} ()
+
+fileLU : Request {FileLU} a ->{Error, FileRW, State FileSystemT} a
+fileLU = cases
+  { FileLU.link (src, dest) -> resume } ->
+    fs = State.get()
+    fs' = flink src dest fs
+    State.put fs'
+    handle resume() with fileLU
+  { FileLU.unlink name -> resume }      ->
+    fs = State.get()
+    fs' = funlink name fs
+    State.put fs'
+    handle resume() with fileLU
+  { result }                            -> result
+
+fileIO m = handle handle handle m() with fileRW with fileCO with fileLU
+
+ability Await a where
+  await : '{Await a} a
+
+ability Yield b where
+  yield : b ->{Yield b} ()
+
+pipe : '{e, Yield b} a -> '{e, Await b} a ->{e} a
+pipe p c =
+  handle c()
+  with cases
+    { x }                        -> x
+    { Await.await () -> resume } -> copipe resume p
+
+copipe : (b ->{e, Await b} a) -> '{e, Yield b} a ->{e} a
+copipe c p =
+  handle p()
+  with cases
+    { x }                       -> x
+    { Yield.yield y -> resume } -> pipe resume do c y
+
+ability Co a where
+  ufork : {Co a} Nat
+  renice : Nat -> Int ->{Co a} ()
+  wait : Nat ->{Co a} ()
+  getResult : Nat ->{Co a} Optional a
+  nice : Nat ->{Co a} Int
+  uinterrupt : {Co a} ()
+
+type Proc a e
+  = Proc (Sstate a e ->{e} [(Nat, a)])
+
+type Pstate a e
+  = Blocked Nat (Proc a e)
+  | Ready (Proc a e)
+
+type Sstate a e
+  = { q : [(Nat, Pstate a e)], done : [(Nat, a)], pid : Nat, pnext : Nat }
+
+runNext : Sstate a e ->{e} [(Nat, a)]
+runNext = cases
+  Sstate.Sstate q done pid pnext ->
+    match q with
+      [] -> done
+      (pid', Pstate.Blocked pid'' resume) +: q' ->
+        runNext
+          (Sstate.Sstate
+            (q' List.++ [(pid', Pstate.Blocked pid'' resume)]) done pid pnext)
+      (pid', Pstate.Ready resume) +: q' ->
+        st' = Sstate.Sstate q' done pid' pnext
+        let
+          (Proc.Proc resume') = resume
+          resume' st'
+
+lookupResult : Nat -> [(Nat, a)] -> Optional a
+lookupResult pid = cases
+  [] -> None
+  (pid', result) +: rest ->
+    if pid Nat.== pid' then Some result else lookupResult pid rest
+
+modifyQueue : Nat -> [(Nat, Pstate a e)] -> [(Nat, Pstate a e)]
+modifyQueue pid = cases
+  [] -> []
+  (pid', pstate) +: rest ->
+    if pid Nat.== pid' then rest
+    else (pid', pstate) List.+: modifyQueue pid rest
+
+lookupNice : Nat -> [(Nat, Int)] -> Int
+lookupNice pid = cases
+  [] -> -1
+  (pid', renice) +: rest ->
+    if pid' Nat.== pid then renice else lookupNice pid rest
+
+modifyNice : Nat -> Int -> [(Nat, Int)] -> [(Nat, Int)]
+modifyNice pid renice = cases
+  [] -> [(pid, renice)]
+  (pid', renice') +: rest ->
+    if pid' Nat.== pid then (pid, renice) List.+: rest
+    else (pid', renice') List.+: modifyNice pid renice rest
+
+lowestNiceInQueue :
+  [(Nat, Int)] -> [(Nat, Pstate a e)] -> Either (Nat, Pstate a e) ()
+lowestNiceInQueue niceValues = cases
+  [] -> Right()
+  (pid, Pstate.Blocked pid' resume) +: rest ->
+    lowestNiceInQueue niceValues rest
+  (pid, Pstate.Ready resume) +: rest ->
+    use Int <
+    use Pstate Ready
+    nextnice = lookupNice pid niceValues
+    match lowestNiceInQueue niceValues rest with
+      Left (pid', pstate) ->
+        nextnice' = lookupNice pid' niceValues
+        if nextnice < nextnice' then Left (pid, Ready resume)
+        else Left (pid', pstate)
+      Right () -> Left (pid, Ready resume)
+
+runNextNice : Sstate a e -> [(Nat, Int)] ->{e} [(Nat, a)]
+runNextNice st niceValues =
+  use List ++
+  use Proc Proc
+  use Pstate Blocked Ready
+  use Sstate Sstate
+  (Sstate q done pid pnext) = st
+  match q with
+    [] -> done
+    (pid', Blocked pid'' resume) +: q' ->
+      runNextNice
+        (Sstate (q' ++ [(pid', Blocked pid'' resume)]) done pid pnext)
+        niceValues
+    (pid', Ready resume) +: q' ->
+      match lowestNiceInQueue niceValues q with
+        Left (pid', Ready resume)         ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Left (pid', Blocked pid'' resume) ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Right ()                          ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+
+minNice : Int
+minNice = -20
+
+schedAging :
+  Sstate a e -> Request {Co a, e} a ->{e, State [(Nat, Int)]} [(Nat, a)]
+schedAging st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNextNice (Sstate.Sstate q done' pid pnext) State.get()
+  { Co.ufork -> resume } ->
+    use Int - <=
+    use List ++
+    use Nat +
+    use Pstate Ready
+    use Sstate Sstate
+    use State get put
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      nicevalue = lookupNice pid get()
+      if nicevalue - +1 <= minNice then
+        q' = q ++ [(pid, Ready resume')]
+        pid' = pnext
+        pnext' = pnext + 1
+        handle resume pid' with scheduler (Sstate q' done pid pnext')
+      else
+        put (modifyNice pnext nicevalue get())
+        put (modifyNice pnext (nicevalue - +1) get())
+        pid' = pnext
+        pnext' = pnext + 1
+        q' = q ++ [(pid', Ready resume')]
+        handle resume pid' with schedAging (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } ->
+    (Sstate.Sstate q done pid pnext) = st
+    nicevalue = lookupNice pid State.get()
+    handle resume nicevalue with schedAging st
+  { Co.renice pid newNice -> resume } ->
+    use Sstate Sstate
+    use State get
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      State.put (modifyNice pid newNice get())
+      runNextNice (Sstate q done pid pnext) get()
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+scheduler : Sstate a e -> Request {Co a, e} a ->{e} [(Nat, a)]
+scheduler st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNext (Sstate.Sstate q done' pid pnext)
+  { Co.ufork -> resume } ->
+    use List ++
+    use Nat +
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      pid' = pnext
+      pnext' = pnext + 1
+      q' = q ++ [(pid', Pstate.Ready resume')]
+      handle resume pid' with scheduler (Sstate q' done pid pnext')
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } -> handle resume +0 with scheduler st
+  { Co.renice pid newNice -> resume } -> handle resume() with scheduler st
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+processExists : Nat -> [(Nat, Pstate a e)] -> Boolean
+processExists pid = cases
+  [] -> false
+  (pid', process) +: rest ->
+    if pid Nat.== pid' then true else processExists pid rest
+
+timeshare2 : '{g, Co a} a ->{g} [(Nat, a)]
+timeshare2 m = handle m() with scheduler (Sstate.Sstate [] [] 1 2)
+
+init : '{e} a ->{e, Co a} ()
+init main =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then
+    a = main()
+    ()
+  else Co.wait pid
+
+type Permission
+  = Read
+  | Write
+  | AddUser
+  | Grant
+  | Revoke
+  | Execute
+
+all : [Permission]
+all =
+  [ Permission.Read
+  , Permission.Write
+  , Permission.AddUser
+  , Permission.Grant
+  , Permission.Revoke
+  , Permission.Execute
+  ]
+
+ability Permit where
+  grant : Text -> Permission ->{Permit} ()
+  revoke : Text -> Permission ->{Permit} ()
+
+checkPermission :
+  User -> Permission -> [(Text, [Permission])] ->{IO, Exception, Error} ()
+checkPermission user required = cases
+  [] -> Error.throw EType.PermissionDenied
+  (user', perms') +: rest ->
+    if userToText user Text.== user' then
+      if allowed required perms' then ()
+      else Error.throw EType.PermissionDenied
+    else checkPermission user required rest
+
+permissions :
+  User
+  -> Request {e, Permit, Session, FileRW, FileLU, FileCO, Co a} a
+  ->{e,
+  IO,
+  Exception,
+  Session,
+  Error,
+  FileRW,
+  FileLU,
+  FileCO,
+  Co a,
+  State [(Text, [Permission])]} a
+permissions user = cases
+  { Permit.grant user' perm -> resume }  ->
+    use List +:
+    use State get
+    checkPermission user Permission.Grant get()
+    existingPerms = lookupPermission user' get()
+    newPerms = perm +: existingPerms
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Permit.revoke user' perm -> resume } ->
+    use State get
+    checkPermission user Permission.Revoke get()
+    newPerms = removePermission perm (lookupPermission user' get())
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Session.ask var -> resume }          ->
+    checkPermission user Permission.Read State.get()
+    answer = Session.ask var
+    handle resume answer with permissions user
+  { Session.su user' -> resume }         ->
+    Session.su user'
+    handle resume() with permissions (User.Username user')
+  { Session.adduser user' -> resume }    ->
+    checkPermission user Permission.AddUser State.get()
+    Session.adduser user'
+    handle resume() with permissions user
+  { Session.setvar var val -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    Session.setvar var val
+    handle resume() with permissions user
+  { FileRW.read i -> resume }            ->
+    checkPermission user Permission.Read State.get()
+    text = FileRW.read i
+    handle resume text with permissions user
+  { FileRW.write (i, text) -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    FileRW.write (i, text)
+    handle resume() with permissions user
+  { FileLU.link (src, dest) -> resume }  ->
+    checkPermission user Permission.Write State.get()
+    FileLU.link (src, dest)
+    handle resume() with permissions user
+  { FileLU.unlink name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    FileLU.unlink name
+    handle resume() with permissions user
+  { FileCO.create name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    ino = FileCO.create name
+    handle resume ino with permissions user
+  { FileCO.open name -> resume }         ->
+    checkPermission user Permission.Read State.get()
+    ino = FileCO.open name
+    handle resume ino with permissions user
+  { Co.ufork -> resume }                 ->
+    checkPermission user Permission.Execute State.get()
+    pid = Co.ufork
+    handle resume pid with permissions user
+  { Co.nice pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    nicevalue = Co.nice pid
+    handle resume nicevalue with permissions user
+  { Co.renice pid newnice -> resume }    ->
+    checkPermission user Permission.Execute State.get()
+    Co.renice pid newnice
+    handle resume() with permissions user
+  { Co.wait pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    Co.wait pid
+    handle resume() with permissions user
+  { Co.uinterrupt -> resume }            ->
+    checkPermission user Permission.Execute State.get()
+    Co.uinterrupt
+    handle resume() with permissions user
+  { Co.getResult pid -> resume }         ->
+    checkPermission user Permission.Execute State.get()
+    result = Co.getResult pid
+    handle resume result with permissions user
+  { result }                             -> result
+
+lookupPermission : Text -> [(Text, [Permission])] -> [Permission]
+lookupPermission var = cases
+  [] -> []
+  (var', perms') +: rest ->
+    if var Text.== var' then perms' else lookupPermission var rest
+
+modifyPermission :
+  Text -> [Permission] -> [(Text, [Permission])] -> [(Text, [Permission])]
+modifyPermission var perms = cases
+  [] -> [(var, perms)]
+  (var', perms'') +: rest ->
+    if var Text.== var' then (var, perms) List.+: rest
+    else (var', perms'') List.+: modifyPermission var perms rest
+
+removePermission : Permission -> [Permission] -> [Permission]
+removePermission perm = cases
+  [] -> []
+  perm' +: rest ->
+    if permEquals perm perm' then rest
+    else perm' List.+: removePermission perm rest
+
+allowed : Permission -> [Permission] -> Boolean
+allowed perm = cases
+  []            -> false
+  perm' +: rest -> if permEquals perm perm' then true else allowed perm rest
+
+permEquals : Permission -> Permission -> Boolean
+permEquals perms1 perms2 = match perms1 with
+  Permission.Read    ->
+    match perms2 with
+      Permission.Read -> true
+      _               -> false
+  Permission.Write   ->
+    match perms2 with
+      Permission.Write -> true
+      _                -> false
+  Permission.AddUser ->
+    match perms2 with
+      Permission.AddUser -> true
+      _                  -> false
+  Permission.Grant   ->
+    match perms2 with
+      Permission.Grant -> true
+      _                -> false
+  Permission.Revoke  ->
+    match perms2 with
+      Permission.Revoke -> true
+      _                 -> false
+  Permission.Execute ->
+    match perms2 with
+      Permission.Execute -> true
+      _                  -> false
+
+initialPermissions : [(Text, [Permission])]
+initialPermissions = [("root", all)]
+
+type EType
+  = PermissionDenied
+  | FileNotFound
+  | FileExists
+  | UserExists
+  | NoSuchUser
+  | UnknownError
+
+toText : EType -> Text
+toText = cases
+  EType.PermissionDenied -> "Permission denied"
+  EType.FileNotFound     -> "File not found"
+  EType.FileExists       -> "File exists"
+  EType.UserExists       -> "User exists"
+  EType.NoSuchUser       -> "No such user"
+  EType.UnknownError     -> "Unknown error"
+
+ability Error where
+  throw : EType ->{Error} ()
+
+fail : Request {e, Error} a ->{e, IO, Exception, Status} Empty
+fail = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    Status.exit 1
+  { result }                    -> Status.exit 0
+
+warn : Request {e, Error} a ->{e, IO, Exception} a
+warn = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    handle resume() with warn
+  { result }                    -> result
+
+nondet2 : Request {TimeSharing} a -> [a]
+nondet2 = cases
+  { TimeSharing.fork -> resume } ->
+    use Nat !=
+    pid = Co.ufork
+    handle resume (pid != 0) with nondet2
+  { result }                     -> [result]
+
+unix :
+  '{e, Session, Error, FileRW, FileLU, FileCO, BasicIO, Co a} a
+  ->{e, IO, Exception} [(Nat, Nat)]
+unix m =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle
+                handle
+                  handle
+                    handle handle m with env (User.Username "root")
+                    with runState initialUserspace
+                  with fileCO
+                with fileLU
+              with fileRW
+            with runState initialFileSystem
+          with interruptWrite
+        with basicIO
+      with warn
+    with exitHandler
+  with scheduler (Sstate.Sstate [] [] 1 2)
+
+cat : Text ->{FileRW, FileCO, BasicIO} ()
+cat name = BasicIO.echo (FileRW.read (FileCO.open name))
+
+catTest : ∀ _. _ ->{FileRW, FileCO, BasicIO} ()
+catTest _ =
+  FileRW.write (FileCO.open "test.txt", "Hello, World!")
+  cat "test.txt"
+
+envVariables : ∀ _. _ ->{Session, BasicIO} ()
+envVariables _ =
+  use BasicIO echo
+  use Session adduser ask su
+  echo whoami()
+  echo "\n"
+  adduser "alice"
+  su "alice"
+  echo (ask "HOME")
+  echo "\n"
+  adduser "bob"
+  adduser "bob"
+  su "bob"
+  echo (ask "HOME")
+
+envVariablesTest : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+envVariablesTest _ = unix envVariables
+
+hamlet : ∀ _. _ ->{BasicIO} ()
+hamlet _ =
+  use BasicIO echo
+  echo "To be, or not to be,\n"
+  echo "that is the question:\n"
+  echo "Wether 'tis nobler in the mind to suffer\n"
+
+multiHandlers : ∀ _. _ ->{BasicIO} ()
+multiHandlers _ =
+  use BasicIO echo
+  echo "Hello,"
+  echo " World!\n"
+
+proc : ∀ _ a. _ ->{Session, BasicIO, Co a} ()
+proc _ =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then ritchie()
+  else
+    Session.su "bob"
+    Co.wait pid
+    hamlet()
+
+ritchie : ∀ _. _ ->{BasicIO} ()
+ritchie _ =
+  use BasicIO echo
+  echo "UNIX is basically\n"
+  echo "a simple operating system\n"
+  echo "but you have to be a genius to understand the simplicity\n"
+
+runCat : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runCat _ = unix catTest
+
+runMultiHandlers : ∀ _. _ ->{IO, Exception} ()
+runMultiHandlers _ = handle multiHandlers() with basicIO
+
+runProc : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runProc _ = unix proc
+
+testMv : '{FileRW, FileCO, BasicIO, State FileSystemT} ()
+testMv _ =
+  use BasicIO echo
+  use FileCO open
+  _ = FileRW.write (open "test.txt", "Hello, World!")
+  mv "test.txt" "test2.txt"
+  echo (FileRW.read (open "test2.txt"))
+  echo "\n"
+
+chainSwitch : Nat ->{IO, Exception, Session} ()
+chainSwitch n =
+  use Nat - <=
+  use Session su
+  if n <= 0 then ()
+  else
+    match whoami() with
+      "root"  -> su "alice"
+      "alice" -> su "bob"
+      "bob"   -> su "root"
+      _       -> printLine "Unknown user"
+    chainSwitch (n - 1)
+
+chainSwitchArg : ∀ _. _ ->{IO, Exception, Session} ()
+chainSwitchArg _ = chainSwitch parseArgs()
+
+extractResult : Nat ->{Co a} a
+extractResult pid = match Co.getResult pid with
+  None   ->
+    Co.wait pid
+    extractResult pid
+  Some x -> x
+
+fib : Nat ->{Co Nat} Nat
+fib n =
+  match n with
+    0 -> 1
+    1 -> 1
+    _ ->
+      use Co ufork
+      use Nat + - ==
+      pid1 = ufork
+      if pid1 == 0 then fib (n - 1)
+      else
+        pid2 = ufork
+        if pid2 == 0 then fib (n - 2)
+        else extractResult pid2 + extractResult pid1
+
+fib10 : ∀ _. _ ->{Co Nat} Nat
+fib10 _ = fib 18
+
+fibArg : ∀ _. _ ->{IO, Exception, Co Nat} Nat
+fibArg _ = fib parseArgs()
+
+fib_memo :
+  Nat ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memo n =
+  use Co ufork
+  use FileRW read
+  use Nat + - ==
+  use Status exit
+  use Text ++
+  file = "fib" ++ Nat.toText n ++ ".txt"
+  match FileCO2.open file with
+    None     ->
+      match n with
+        0 ->
+          memoize file 0
+          exit 0
+        1 ->
+          memoize file 1
+          exit 1
+        _ ->
+          pid1 = ufork
+          if pid1 == 0 then fib_memo (n - 1)
+          else
+            pid2 = ufork
+            if pid2 == 0 then fib_memo (n - 2)
+            else
+              Co.uinterrupt
+              result = extractResult pid2 + extractResult pid1
+              memoize file result
+              exit result
+    Some ino ->
+      result = unwrap (Nat.fromText (read ino))
+      printLine (read ino)
+      exit result
+
+fib_memoArg :
+  ∀ _. _ ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memoArg _ = fib_memo parseArgs()
+
+fileCO2 : Request {FileCO2} a ->{Error, State FileSystemT} a
+fileCO2 = cases
+  { FileCO2.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO2
+  { FileCO2.open name -> resume }   ->
+    fs = State.get()
+    ino = handle Some (fopen name fs) with withDefault None
+    State.put fs
+    handle resume ino with fileCO2
+  { result }                        -> result
+
+fileMayhem : Nat ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhem = cases
+  0 -> ()
+  n ->
+    use FileCO2 create open
+    use FileLU unlink
+    use FileRW write
+    use Nat -
+    use Text ++
+    n' = Nat.toText n
+    name = "file" ++ n'
+    _ = create name
+    inum1 = unwrap (open name)
+    write (inum1, n')
+    middle = "mid"
+    FileLU.link (name, middle)
+    end = "end"
+    _ = create end
+    inum2 = unwrap (open middle)
+    txt = FileRW.read inum2
+    inum3 = unwrap (open end)
+    write (inum3, txt)
+    unlink middle
+    unlink name
+    fileMayhem (n - 1)
+
+fileMayhemArg : ∀ _. _ ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhemArg _ = fileMayhem parseArgs()
+
+initdaniel : [(User, [(Text, Text)])]
+initdaniel =
+  use User Username
+  [ (Username "root", [("USER", "root")])
+  , (Username "alice", [("USER", "alice")])
+  , (Username "bob", [("USER", "bob")])
+  ]
+
+memoize : Text -> Nat ->{Exception, Session, FileRW, FileCO2} ()
+memoize file result =
+  use Session su
+  su "root"
+  ino = FileCO2.create file
+  FileRW.write (ino, Nat.toText result)
+  su "alice"
+
+mv : Text -> Text ->{FileRW, FileCO, BasicIO, State FileSystemT} ()
+mv src dest =
+  use FileCO create
+  file = FileRW.read (FileCO.open src)
+  _ = create src
+  FileRW.write (create dest, file)
+
+runChainSwitch _ =
+  handle
+    handle handle chainSwitchArg() with env (User.Username "root")
+    with runState initdaniel
+  with warn
+
+runFib : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runFib _ = timeshare2 fibArg
+
+runFib_memo _ =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle handle fib_memoArg() with exitHandler
+              with scheduler (Sstate.Sstate [] [] 1 2)
+            with env (User.Username "root")
+          with runState initdaniel
+        with fileRW
+      with fileCO2
+    with runState initialFileSystem
+  with warn
+
+withDefault : a -> Request {Error, e} a ->{e} a
+withDefault default = cases
+  { result }             -> result
+  { Error.throw _ -> _ } -> default
+
+-- The definitions below no longer typecheck with the changes above.
+-- Please fix the errors and try `update` again.
+
+runFileMayhem _ =
+  handle
+    handle
+      handle handle handle fileMayhemArg() with fileCO with fileLU with fileRW
+    with warn
+  with runState initialFileSystem
+
+-- runTestMv : '{IO, Exception} ()
+-- runTestMv _ =
+--   handle
+--     handle handle handle handle testMv() with basicIO with fileCO with fileRW
+--     with runState initialFileSystem
+--   with warn
+
+
+
+---- Anything below this line is ignored by Unison.
+
+
+ability BasicIO where
+  echo : Text ->{BasicIO} ()
+
+basicIO : Request {BasicIO} a ->{IO, Exception} a
+basicIO = cases
+  { BasicIO.echo text -> resume } ->
+    putText stdOut text
+    handle resume() with basicIO
+  { result }                      -> result
+
+type Empty
+  =
+
+ability Status where
+  exit : Nat ->{Status} Empty
+
+exitHandler : Request {g, Status} a -> Nat
+exitHandler = cases
+  { result }                  -> 0
+  { Status.exit v -> resume } -> v
+
+type User
+  = Username Text
+
+ability Session where
+  su : Text ->{Session} ()
+  adduser : Text ->{Session} ()
+  setvar : Text -> Text ->{Session} ()
+  ask : Text ->{Session} Text
+
+whoami : '{Session} Text
+whoami _ = Session.ask "USER"
+
+env : User -> Request {Session} a ->{Error, State [(User, [(Text, Text)])]} a
+env user = cases
+  { result } -> result
+  { Session.ask var -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    val = lookupEnvVar var envs
+    handle resume val with env user
+  { Session.su user' -> resume } ->
+    if userExists (User.Username user') State.get() then
+      handle resume() with env (User.Username user')
+    else
+      Error.throw EType.NoSuchUser
+      handle resume() with env user
+  { Session.setvar var val -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    envs' = modifyEnvVar var val envs
+    State.put (modifyEnvs user envs' st)
+    handle resume() with env user
+  { Session.adduser user' -> resume } ->
+    st = State.get()
+    newuser = User.Username user'
+    newvars = [("USER", user')]
+    newenv = modifyEnvs newuser newvars st
+    if Boolean.not (userExists newuser st) then
+      State.put newenv
+      handle resume() with env newuser
+    else
+      Error.throw EType.UserExists
+      handle resume() with env user
+
+lookupEnvVar : Text -> [(Text, Text)] -> Text
+lookupEnvVar var = cases
+  [] -> ""
+  (var', val) +: rest ->
+    if var Text.== var' then val else lookupEnvVar var rest
+
+modifyEnvVar : Text -> Text -> [(Text, Text)] -> [(Text, Text)]
+modifyEnvVar var val = cases
+  [] -> [(var, val)]
+  (var', val') +: rest ->
+    if var Text.== var' then (var, val) List.+: rest
+    else (var', val') List.+: modifyEnvVar var val rest
+
+lookupEnvs : User -> [(User, [(Text, Text)])] -> [(Text, Text)]
+lookupEnvs user = cases
+  [] -> []
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then env
+    else lookupEnvs user rest
+
+modifyEnvs :
+  User
+  -> [(Text, Text)]
+  -> [(User, [(Text, Text)])]
+  -> [(User, [(Text, Text)])]
+modifyEnvs user env = cases
+  [] -> [(user, env)]
+  (user', env') +: rest ->
+    if userToText user Text.== userToText user' then (user, env) List.+: rest
+    else (user', env') List.+: modifyEnvs user env rest
+
+userExists : User -> [(User, [(Text, Text)])] -> Boolean
+userExists user = cases
+  [] -> false
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then true
+    else userExists user rest
+
+userToText : User -> Text
+userToText = cases User.Username username -> username
+
+initialUserspace : [(User, [(Text, Text)])]
+initialUserspace = [(User.Username "root", [("USER", "root")])]
+
+ability Interrupt where
+  interrupt : {Interrupt} ()
+
+type PState a e
+  = Paused ('{e} PState a e)
+  | Done a
+
+interruptWrite : Request {e, BasicIO} x ->{e, BasicIO, Co a} ()
+interruptWrite = cases
+  { BasicIO.echo text -> resume } ->
+    Co.uinterrupt
+    BasicIO.echo text
+    handle resume() with interruptWrite
+  { result }                      -> ()
+
+reifyProcess : Request {Interrupt, e} a -> PState a e
+reifyProcess = cases
+  { Interrupt.interrupt -> resume } ->
+    PState.Paused (_ -> (handle resume() with reifyProcess))
+  { result } -> PState.Done result
+
+ability TimeSharing where
+  fork : {TimeSharing} Boolean
+
+nondet : Request {TimeSharing} a -> [a]
+nondet = cases
+  { TimeSharing.fork -> resume } ->
+    (handle resume true with nondet) List.++ (handle resume false with nondet)
+  { result } -> [result]
+
+sched : [PState a {e, TimeSharing}] -> [a] ->{e} [a]
+sched ps done = match ps with
+  []                     -> done
+  PState.Done res +: ps' -> sched ps' (res List.+: done)
+  PState.Paused m +: ps' -> sched (ps' List.++ (handle m() with nondet)) done
+
+timeshare : '{g, Interrupt, TimeSharing} o ->{g} [o]
+timeshare m = sched [PState.Paused (_ -> (handle m() with reifyProcess))] []
+
+ability State a where
+  put : a ->{State a} ()
+  get : '{State a} a
+
+runState : a -> Request {State a} b -> (a, b)
+runState v = cases
+  { State.put v' -> resume } -> handle resume() with runState v'
+  { State.get () -> resume } -> handle resume v with runState v
+  { result }                 -> (v, result)
+
+type DirectoryT
+  = Directory (Text, Nat)
+
+type DataRegionT
+  = DataRegion (Nat, Text)
+
+type INodeT
+  = INode Nat Nat
+
+type IListT
+  = IList (Nat, INodeT)
+
+type FileSystemT
+  = FileSystem [DirectoryT] [IListT] [DataRegionT] Nat Nat
+
+initialINode : INodeT
+initialINode = INodeT.INode 0 0
+
+initialDirectory : DirectoryT
+initialDirectory = DirectoryT.Directory ("stdout", 0)
+
+initialDataRegion : DataRegionT
+initialDataRegion = DataRegionT.DataRegion (0, "")
+
+initialIList : IListT
+initialIList = IListT.IList (0, initialINode)
+
+initialFileSystem : FileSystemT
+initialFileSystem =
+  FileSystemT.FileSystem
+    [initialDirectory] [initialIList] [initialDataRegion] 1 1
+
+lookupINode : Nat -> [IListT] -> Either INodeT ()
+lookupINode i = cases
+  [] -> Right()
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then Left inode else lookupINode i rest
+
+lookupFName : Text -> [DirectoryT] -> Either Nat ()
+lookupFName name = cases
+  [] -> Right()
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then Left i else lookupFName name rest
+
+modifyINode : Nat -> INodeT -> [IListT] -> [IListT]
+modifyINode i inode = cases
+  [] -> []
+  IListT.IList (i', inode') +: rest ->
+    if i Nat.== i' then IListT.IList (i, inode) List.+: rest
+    else IListT.IList (i', inode') List.+: modifyINode i inode rest
+
+lookupDataRegion : Nat -> [DataRegionT] -> Either Text ()
+lookupDataRegion i = cases
+  [] -> Right()
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then Left text else lookupDataRegion i rest
+
+modifyDataRegion : Nat -> Text -> [DataRegionT] -> [DataRegionT]
+modifyDataRegion i text = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text') +: rest ->
+    if i Nat.== i' then
+      DataRegionT.DataRegion (i, text) List.+: rest
+    else
+      DataRegionT.DataRegion (i', text') List.+: modifyDataRegion i text rest
+
+fread : Nat -> FileSystemT -> Either Text ()
+fread i = cases
+  FileSystemT.FileSystem directories ilists dataRegions _ _ ->
+    match lookupINode i ilists with
+      Left inode ->
+        (INodeT.INode _ dataRegion) = inode
+        match lookupDataRegion dataRegion dataRegions with
+          Left text -> Left text
+          Right ()  -> Right()
+      Right ()   -> Right()
+
+fwrite : Nat -> Text -> FileSystemT -> FileSystemT
+fwrite i text fs =
+  use FileSystemT FileSystem
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  match lookupINode i ilists with
+    Left inode ->
+      (INodeT.INode _ dataRegion) = inode
+      FileSystem
+        directories
+        ilists
+        (modifyDataRegion dataRegion text dataRegions)
+        dnext
+        inext
+    Right () -> fs
+
+ability FileRW where
+  write : (Nat, Text) ->{FileRW} ()
+  read : Nat ->{FileRW} Text
+
+fileRW : Request {FileRW} a ->{Error, State FileSystemT} a
+fileRW = cases
+  { FileRW.read i -> resume }          ->
+    fs = State.get()
+    text = fread i fs
+    match text with
+      Left text -> handle resume text with fileRW
+      Right ()  ->
+        Error.throw EType.FileNotFound
+        handle resume "" with fileRW
+  { FileRW.write (i, text) -> resume } ->
+    fs = State.get()
+    fs' = fwrite i text fs
+    State.put fs'
+    handle resume() with fileRW
+  { result }                           -> result
+
+fileEcho : Request {BasicIO} a ->{State FileSystemT} a
+fileEcho = cases
+  { BasicIO.echo text -> resume } ->
+    fs = State.get()
+    State.put (fwrite 0 text fs)
+    handle resume() with fileEcho
+  { result }                      -> result
+
+fopen : Text -> FileSystemT ->{Error} Nat
+fopen name = cases
+  FileSystemT.FileSystem directories ilists dataRegions dnext inext ->
+    match lookupFName name directories with
+      Left i   -> i
+      Right () ->
+        Error.throw EType.FileNotFound
+        inext
+
+has : Text -> [DirectoryT] -> Boolean
+has name = cases
+  [] -> false
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then true else has name rest
+
+fcreate : Text -> FileSystemT -> (Nat, FileSystemT)
+fcreate name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = fopen name fs
+    inode = lookupINode ino ilists
+    match inode with
+      Left inode ->
+        (INode ino loc) = inode
+        dreg' = modifyDataRegion loc "" dataRegions
+        (ino, FileSystem directories ilists dreg' dnext inext)
+      Right ()   -> (ino, fs)
+  else
+    dreg' = DataRegionT.DataRegion (dnext, "") +: dataRegions
+    inext' = inext + 1
+    dnext' = dnext + 1
+    inode = INode 1 dnext
+    ilists' = IListT.IList (inext, inode) +: ilists
+    directories' = DirectoryT.Directory (name, inext) +: directories
+    (inext, FileSystem directories' ilists' dreg' dnext' inext')
+
+ability FileCO where
+  create : Text ->{FileCO} Nat
+  open : Text ->{FileCO} Nat
+
+fileCO : Request {FileCO} a ->{Error, State FileSystemT} a
+fileCO = cases
+  { FileCO.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO
+  { FileCO.open name -> resume }   ->
+    fs = State.get()
+    ino = fopen name fs
+    State.put fs
+    handle resume ino with fileCO
+  { result }                       -> result
+
+flink : Text -> Text -> FileSystemT ->{Error} FileSystemT
+flink src dest fs =
+  use Error throw
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has dest directories then fs
+  else
+    ino = lookupFName src directories
+    match ino with
+      Left ino ->
+        directories' = DirectoryT.Directory (dest, ino) +: directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            inode' = INode (ino + 1) loc
+            ilists' = modifyINode ino inode' ilists
+            FileSystem directories' ilists' dataRegions dnext inext
+          Right ()   ->
+            throw EType.FileExists
+            fs
+      Right () ->
+        throw EType.FileNotFound
+        fs
+
+removeINode : Nat -> [IListT] -> [IListT]
+removeINode i = cases
+  [] -> []
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then rest
+    else IListT.IList (i', inode) List.+: removeINode i rest
+
+removeDataRegion : Nat -> [DataRegionT] -> [DataRegionT]
+removeDataRegion i = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then rest
+    else DataRegionT.DataRegion (i', text) List.+: removeDataRegion i rest
+
+removeDirectory : Text -> [DirectoryT] -> [DirectoryT]
+removeDirectory name = cases
+  [] -> []
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then rest
+    else DirectoryT.Directory (name', i) List.+: removeDirectory name rest
+
+funlink : Text -> FileSystemT -> FileSystemT
+funlink name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use Nat - >
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = lookupFName name directories
+    match ino with
+      Left ino ->
+        directories' = removeDirectory name directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            if loc > 1 then
+              loc' = loc - 1
+              inode' = INode ino loc'
+              ilists' = modifyINode ino inode' ilists
+              FileSystem directories' ilists' dataRegions dnext inext
+            else
+              ilists' = removeINode ino ilists
+              dataRegions' = removeDataRegion loc dataRegions
+              FileSystem directories' ilists' dataRegions' dnext inext
+          Right ()   -> fs
+      Right () -> fs
+  else fs
+
+ability FileLU where
+  unlink : Text ->{FileLU} ()
+  link : (Text, Text) ->{FileLU} ()
+
+fileLU : Request {FileLU} a ->{Error, FileRW, State FileSystemT} a
+fileLU = cases
+  { FileLU.link (src, dest) -> resume } ->
+    fs = State.get()
+    fs' = flink src dest fs
+    State.put fs'
+    handle resume() with fileLU
+  { FileLU.unlink name -> resume }      ->
+    fs = State.get()
+    fs' = funlink name fs
+    State.put fs'
+    handle resume() with fileLU
+  { result }                            -> result
+
+fileIO m = handle handle handle m() with fileRW with fileCO with fileLU
+
+ability Await a where
+  await : '{Await a} a
+
+ability Yield b where
+  yield : b ->{Yield b} ()
+
+pipe : '{e, Yield b} a -> '{e, Await b} a ->{e} a
+pipe p c =
+  handle c()
+  with cases
+    { x }                        -> x
+    { Await.await () -> resume } -> copipe resume p
+
+copipe : (b ->{e, Await b} a) -> '{e, Yield b} a ->{e} a
+copipe c p =
+  handle p()
+  with cases
+    { x }                       -> x
+    { Yield.yield y -> resume } -> pipe resume do c y
+
+ability Co a where
+  ufork : {Co a} Nat
+  renice : Nat -> Int ->{Co a} ()
+  wait : Nat ->{Co a} ()
+  getResult : Nat ->{Co a} Optional a
+  nice : Nat ->{Co a} Int
+  uinterrupt : {Co a} ()
+
+type Proc a e
+  = Proc (Sstate a e ->{e} [(Nat, a)])
+
+type Pstate a e
+  = Blocked Nat (Proc a e)
+  | Ready (Proc a e)
+
+type Sstate a e
+  = { q : [(Nat, Pstate a e)], done : [(Nat, a)], pid : Nat, pnext : Nat }
+
+runNext : Sstate a e ->{e} [(Nat, a)]
+runNext = cases
+  Sstate.Sstate q done pid pnext ->
+    match q with
+      [] -> done
+      (pid', Pstate.Blocked pid'' resume) +: q' ->
+        runNext
+          (Sstate.Sstate
+            (q' List.++ [(pid', Pstate.Blocked pid'' resume)]) done pid pnext)
+      (pid', Pstate.Ready resume) +: q' ->
+        st' = Sstate.Sstate q' done pid' pnext
+        let
+          (Proc.Proc resume') = resume
+          resume' st'
+
+lookupResult : Nat -> [(Nat, a)] -> Optional a
+lookupResult pid = cases
+  [] -> None
+  (pid', result) +: rest ->
+    if pid Nat.== pid' then Some result else lookupResult pid rest
+
+modifyQueue : Nat -> [(Nat, Pstate a e)] -> [(Nat, Pstate a e)]
+modifyQueue pid = cases
+  [] -> []
+  (pid', pstate) +: rest ->
+    if pid Nat.== pid' then rest
+    else (pid', pstate) List.+: modifyQueue pid rest
+
+lookupNice : Nat -> [(Nat, Int)] -> Int
+lookupNice pid = cases
+  [] -> -1
+  (pid', renice) +: rest ->
+    if pid' Nat.== pid then renice else lookupNice pid rest
+
+modifyNice : Nat -> Int -> [(Nat, Int)] -> [(Nat, Int)]
+modifyNice pid renice = cases
+  [] -> [(pid, renice)]
+  (pid', renice') +: rest ->
+    if pid' Nat.== pid then (pid, renice) List.+: rest
+    else (pid', renice') List.+: modifyNice pid renice rest
+
+lowestNiceInQueue :
+  [(Nat, Int)] -> [(Nat, Pstate a e)] -> Either (Nat, Pstate a e) ()
+lowestNiceInQueue niceValues = cases
+  [] -> Right()
+  (pid, Pstate.Blocked pid' resume) +: rest ->
+    lowestNiceInQueue niceValues rest
+  (pid, Pstate.Ready resume) +: rest ->
+    use Int <
+    use Pstate Ready
+    nextnice = lookupNice pid niceValues
+    match lowestNiceInQueue niceValues rest with
+      Left (pid', pstate) ->
+        nextnice' = lookupNice pid' niceValues
+        if nextnice < nextnice' then Left (pid, Ready resume)
+        else Left (pid', pstate)
+      Right () -> Left (pid, Ready resume)
+
+runNextNice : Sstate a e -> [(Nat, Int)] ->{e} [(Nat, a)]
+runNextNice st niceValues =
+  use List ++
+  use Proc Proc
+  use Pstate Blocked Ready
+  use Sstate Sstate
+  (Sstate q done pid pnext) = st
+  match q with
+    [] -> done
+    (pid', Blocked pid'' resume) +: q' ->
+      runNextNice
+        (Sstate (q' ++ [(pid', Blocked pid'' resume)]) done pid pnext)
+        niceValues
+    (pid', Ready resume) +: q' ->
+      match lowestNiceInQueue niceValues q with
+        Left (pid', Ready resume)         ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Left (pid', Blocked pid'' resume) ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Right ()                          ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+
+minNice : Int
+minNice = -20
+
+schedAging :
+  Sstate a e -> Request {Co a, e} a ->{e, State [(Nat, Int)]} [(Nat, a)]
+schedAging st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNextNice (Sstate.Sstate q done' pid pnext) State.get()
+  { Co.ufork -> resume } ->
+    use Int - <=
+    use List ++
+    use Nat +
+    use Pstate Ready
+    use Sstate Sstate
+    use State get put
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      nicevalue = lookupNice pid get()
+      if nicevalue - +1 <= minNice then
+        q' = q ++ [(pid, Ready resume')]
+        pid' = pnext
+        pnext' = pnext + 1
+        handle resume pid' with scheduler (Sstate q' done pid pnext')
+      else
+        put (modifyNice pnext nicevalue get())
+        put (modifyNice pnext (nicevalue - +1) get())
+        pid' = pnext
+        pnext' = pnext + 1
+        q' = q ++ [(pid', Ready resume')]
+        handle resume pid' with schedAging (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } ->
+    (Sstate.Sstate q done pid pnext) = st
+    nicevalue = lookupNice pid State.get()
+    handle resume nicevalue with schedAging st
+  { Co.renice pid newNice -> resume } ->
+    use Sstate Sstate
+    use State get
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      State.put (modifyNice pid newNice get())
+      runNextNice (Sstate q done pid pnext) get()
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+scheduler : Sstate a e -> Request {Co a, e} a ->{e} [(Nat, a)]
+scheduler st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNext (Sstate.Sstate q done' pid pnext)
+  { Co.ufork -> resume } ->
+    use List ++
+    use Nat +
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      pid' = pnext
+      pnext' = pnext + 1
+      q' = q ++ [(pid', Pstate.Ready resume')]
+      handle resume pid' with scheduler (Sstate q' done pid pnext')
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } -> handle resume +0 with scheduler st
+  { Co.renice pid newNice -> resume } -> handle resume() with scheduler st
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+processExists : Nat -> [(Nat, Pstate a e)] -> Boolean
+processExists pid = cases
+  [] -> false
+  (pid', process) +: rest ->
+    if pid Nat.== pid' then true else processExists pid rest
+
+timeshare2 : '{g, Co a} a ->{g} [(Nat, a)]
+timeshare2 m = handle m() with scheduler (Sstate.Sstate [] [] 1 2)
+
+init : '{e} a ->{e, Co a} ()
+init main =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then
+    a = main()
+    ()
+  else Co.wait pid
+
+type Permission
+  = Read
+  | Write
+  | AddUser
+  | Grant
+  | Revoke
+  | Execute
+
+all : [Permission]
+all =
+  [ Permission.Read
+  , Permission.Write
+  , Permission.AddUser
+  , Permission.Grant
+  , Permission.Revoke
+  , Permission.Execute
+  ]
+
+ability Permit where
+  grant : Text -> Permission ->{Permit} ()
+  revoke : Text -> Permission ->{Permit} ()
+
+checkPermission :
+  User -> Permission -> [(Text, [Permission])] ->{IO, Exception, Error} ()
+checkPermission user required = cases
+  [] -> Error.throw EType.PermissionDenied
+  (user', perms') +: rest ->
+    if userToText user Text.== user' then
+      if allowed required perms' then ()
+      else Error.throw EType.PermissionDenied
+    else checkPermission user required rest
+
+permissions :
+  User
+  -> Request {e, Permit, Session, FileRW, FileLU, FileCO, Co a} a
+  ->{e,
+  IO,
+  Exception,
+  Session,
+  Error,
+  FileRW,
+  FileLU,
+  FileCO,
+  Co a,
+  State [(Text, [Permission])]} a
+permissions user = cases
+  { Permit.grant user' perm -> resume }  ->
+    use List +:
+    use State get
+    checkPermission user Permission.Grant get()
+    existingPerms = lookupPermission user' get()
+    newPerms = perm +: existingPerms
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Permit.revoke user' perm -> resume } ->
+    use State get
+    checkPermission user Permission.Revoke get()
+    newPerms = removePermission perm (lookupPermission user' get())
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Session.ask var -> resume }          ->
+    checkPermission user Permission.Read State.get()
+    answer = Session.ask var
+    handle resume answer with permissions user
+  { Session.su user' -> resume }         ->
+    Session.su user'
+    handle resume() with permissions (User.Username user')
+  { Session.adduser user' -> resume }    ->
+    checkPermission user Permission.AddUser State.get()
+    Session.adduser user'
+    handle resume() with permissions user
+  { Session.setvar var val -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    Session.setvar var val
+    handle resume() with permissions user
+  { FileRW.read i -> resume }            ->
+    checkPermission user Permission.Read State.get()
+    text = FileRW.read i
+    handle resume text with permissions user
+  { FileRW.write (i, text) -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    FileRW.write (i, text)
+    handle resume() with permissions user
+  { FileLU.link (src, dest) -> resume }  ->
+    checkPermission user Permission.Write State.get()
+    FileLU.link (src, dest)
+    handle resume() with permissions user
+  { FileLU.unlink name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    FileLU.unlink name
+    handle resume() with permissions user
+  { FileCO.create name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    ino = FileCO.create name
+    handle resume ino with permissions user
+  { FileCO.open name -> resume }         ->
+    checkPermission user Permission.Read State.get()
+    ino = FileCO.open name
+    handle resume ino with permissions user
+  { Co.ufork -> resume }                 ->
+    checkPermission user Permission.Execute State.get()
+    pid = Co.ufork
+    handle resume pid with permissions user
+  { Co.nice pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    nicevalue = Co.nice pid
+    handle resume nicevalue with permissions user
+  { Co.renice pid newnice -> resume }    ->
+    checkPermission user Permission.Execute State.get()
+    Co.renice pid newnice
+    handle resume() with permissions user
+  { Co.wait pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    Co.wait pid
+    handle resume() with permissions user
+  { Co.uinterrupt -> resume }            ->
+    checkPermission user Permission.Execute State.get()
+    Co.uinterrupt
+    handle resume() with permissions user
+  { Co.getResult pid -> resume }         ->
+    checkPermission user Permission.Execute State.get()
+    result = Co.getResult pid
+    handle resume result with permissions user
+  { result }                             -> result
+
+lookupPermission : Text -> [(Text, [Permission])] -> [Permission]
+lookupPermission var = cases
+  [] -> []
+  (var', perms') +: rest ->
+    if var Text.== var' then perms' else lookupPermission var rest
+
+modifyPermission :
+  Text -> [Permission] -> [(Text, [Permission])] -> [(Text, [Permission])]
+modifyPermission var perms = cases
+  [] -> [(var, perms)]
+  (var', perms'') +: rest ->
+    if var Text.== var' then (var, perms) List.+: rest
+    else (var', perms'') List.+: modifyPermission var perms rest
+
+removePermission : Permission -> [Permission] -> [Permission]
+removePermission perm = cases
+  [] -> []
+  perm' +: rest ->
+    if permEquals perm perm' then rest
+    else perm' List.+: removePermission perm rest
+
+allowed : Permission -> [Permission] -> Boolean
+allowed perm = cases
+  []            -> false
+  perm' +: rest -> if permEquals perm perm' then true else allowed perm rest
+
+permEquals : Permission -> Permission -> Boolean
+permEquals perms1 perms2 = match perms1 with
+  Permission.Read    ->
+    match perms2 with
+      Permission.Read -> true
+      _               -> false
+  Permission.Write   ->
+    match perms2 with
+      Permission.Write -> true
+      _                -> false
+  Permission.AddUser ->
+    match perms2 with
+      Permission.AddUser -> true
+      _                  -> false
+  Permission.Grant   ->
+    match perms2 with
+      Permission.Grant -> true
+      _                -> false
+  Permission.Revoke  ->
+    match perms2 with
+      Permission.Revoke -> true
+      _                 -> false
+  Permission.Execute ->
+    match perms2 with
+      Permission.Execute -> true
+      _                  -> false
+
+initialPermissions : [(Text, [Permission])]
+initialPermissions = [("root", all)]
+
+type EType
+  = PermissionDenied
+  | FileNotFound
+  | FileExists
+  | UserExists
+  | NoSuchUser
+  | UnknownError
+
+toText : EType -> Text
+toText = cases
+  EType.PermissionDenied -> "Permission denied"
+  EType.FileNotFound     -> "File not found"
+  EType.FileExists       -> "File exists"
+  EType.UserExists       -> "User exists"
+  EType.NoSuchUser       -> "No such user"
+  EType.UnknownError     -> "Unknown error"
+
+ability Error where
+  throw : EType ->{Error} ()
+
+fail : Request {e, Error} a ->{e, IO, Exception, Status} Empty
+fail = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    Status.exit 1
+  { result }                    -> Status.exit 0
+
+warn : Request {e, Error} a ->{e, IO, Exception} a
+warn = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    handle resume() with warn
+  { result }                    -> result
+
+nondet2 : Request {TimeSharing} a -> [a]
+nondet2 = cases
+  { TimeSharing.fork -> resume } ->
+    use Nat !=
+    pid = Co.ufork
+    handle resume (pid != 0) with nondet2
+  { result }                     -> [result]
+
+unix :
+  '{e, Session, Error, FileRW, FileLU, FileCO, BasicIO, Co a} a
+  ->{e, IO, Exception} [(Nat, Nat)]
+unix m =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle
+                handle
+                  handle
+                    handle handle m with env (User.Username "root")
+                    with runState initialUserspace
+                  with fileCO
+                with fileLU
+              with fileRW
+            with runState initialFileSystem
+          with interruptWrite
+        with basicIO
+      with warn
+    with exitHandler
+  with scheduler (Sstate.Sstate [] [] 1 2)
+
+cat : Text ->{FileRW, FileCO, BasicIO} ()
+cat name = BasicIO.echo (FileRW.read (FileCO.open name))
+
+catTest : ∀ _. _ ->{FileRW, FileCO, BasicIO} ()
+catTest _ =
+  FileRW.write (FileCO.open "test.txt", "Hello, World!")
+  cat "test.txt"
+
+envVariables : ∀ _. _ ->{Session, BasicIO} ()
+envVariables _ =
+  use BasicIO echo
+  use Session adduser ask su
+  echo whoami()
+  echo "\n"
+  adduser "alice"
+  su "alice"
+  echo (ask "HOME")
+  echo "\n"
+  adduser "bob"
+  adduser "bob"
+  su "bob"
+  echo (ask "HOME")
+
+envVariablesTest : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+envVariablesTest _ = unix envVariables
+
+hamlet : ∀ _. _ ->{BasicIO} ()
+hamlet _ =
+  use BasicIO echo
+  echo "To be, or not to be,\n"
+  echo "that is the question:\n"
+  echo "Wether 'tis nobler in the mind to suffer\n"
+
+multiHandlers : ∀ _. _ ->{BasicIO} ()
+multiHandlers _ =
+  use BasicIO echo
+  echo "Hello,"
+  echo " World!\n"
+
+proc : ∀ _ a. _ ->{Session, BasicIO, Co a} ()
+proc _ =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then ritchie()
+  else
+    Session.su "bob"
+    Co.wait pid
+    hamlet()
+
+ritchie : ∀ _. _ ->{BasicIO} ()
+ritchie _ =
+  use BasicIO echo
+  echo "UNIX is basically\n"
+  echo "a simple operating system\n"
+  echo "but you have to be a genius to understand the simplicity\n"
+
+runCat : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runCat _ = unix catTest
+
+runMultiHandlers : ∀ _. _ ->{IO, Exception} ()
+runMultiHandlers _ = handle multiHandlers() with basicIO
+
+runProc : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runProc _ = unix proc
+
+testMv : '{FileRW, FileCO, BasicIO, State FileSystemT} ()
+testMv _ =
+  use BasicIO echo
+  use FileCO open
+  _ = FileRW.write (open "test.txt", "Hello, World!")
+  mv "test.txt" "test2.txt"
+  echo (FileRW.read (open "test2.txt"))
+  echo "\n"
+
+-- The definitions below no longer typecheck with the changes above.
+-- Please fix the errors and try `update` again.
+
+chainSwitch : Nat ->{IO, Exception, Session} ()
+chainSwitch n =
+  use Nat - <=
+  if n <= 0 then ()
+  else
+    match whoami() with
+      "root"  -> su "alice"
+      "alice" -> su "bob"
+      "bob"   -> su "root"
+      _       -> printLine "Unknown user"
+    chainSwitch (n - 1)
+
+chainSwitchArg : ∀ _. _ ->{IO, Exception, Session} ()
+chainSwitchArg _ = chainSwitch parseArgs()
+
+extractResult : Nat ->{Co a} a
+extractResult pid = match getResult pid with
+  None   ->
+    Co.wait pid
+    extractResult pid
+  Some x -> x
+
+fib : Nat ->{Co Nat} Nat
+fib n =
+  match n with
+    0 -> 1
+    1 -> 1
+    _ ->
+      use Nat + - ==
+      pid1 = ufork
+      if pid1 == 0 then fib (n - 1)
+      else
+        pid2 = ufork
+        if pid2 == 0 then fib (n - 2)
+        else extractResult pid2 + extractResult pid1
+
+fib10 : ∀ _. _ ->{Co Nat} Nat
+fib10 _ = fib 18
+
+fibArg : ∀ _. _ ->{IO, Exception, Co Nat} Nat
+fibArg _ = fib parseArgs()
+
+fib_memo :
+  Nat ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memo n =
+  use FileRW read
+  use Nat + - ==
+  use Text ++
+  file = "fib" ++ Nat.toText n ++ ".txt"
+  match FileCO2.open file with
+    None     ->
+      match n with
+        0 ->
+          memoize file 0
+          exit 0
+        1 ->
+          memoize file 1
+          exit 1
+        _ ->
+          pid1 = ufork
+          if pid1 == 0 then fib_memo (n - 1)
+          else
+            pid2 = ufork
+            if pid2 == 0 then fib_memo (n - 2)
+            else
+              uinterrupt
+              result = extractResult pid2 + extractResult pid1
+              memoize file result
+              exit result
+    Some ino ->
+      result = unwrap (Nat.fromText (read ino))
+      printLine (read ino)
+      exit result
+
+fib_memoArg :
+  ∀ _. _ ->{IO, Exception, Status, Session, FileRW, FileCO2, Co Nat} Empty
+fib_memoArg _ = fib_memo parseArgs()
+
+fileCO2 : Request {FileCO2} a ->{Error, State FileSystemT} a
+fileCO2 = cases
+  { FileCO2.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO2
+  { FileCO2.open name -> resume }   ->
+    fs = State.get()
+    ino = handle Some (fopen name fs) with withDefault None
+    State.put fs
+    handle resume ino with fileCO2
+  { result }                        -> result
+
+fileMayhem : Nat ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhem = cases
+  0 -> ()
+  n ->
+    use FileCO2 create open
+    use FileRW write
+    use Nat -
+    use Text ++
+    n' = Nat.toText n
+    name = "file" ++ n'
+    _ = create name
+    inum1 = unwrap (open name)
+    write (inum1, n')
+    middle = "mid"
+    FileLU.link (name, middle)
+    end = "end"
+    _ = create end
+    inum2 = unwrap (open middle)
+    txt = FileRW.read inum2
+    inum3 = unwrap (open end)
+    write (inum3, txt)
+    unlink middle
+    unlink name
+    fileMayhem (n - 1)
+
+fileMayhemArg : ∀ _. _ ->{IO, Exception, Error, FileRW, FileLU, FileCO2} ()
+fileMayhemArg _ = fileMayhem parseArgs()
+
+initdaniel : [(User, [(Text, Text)])]
+initdaniel =
+  [ (Username "root", [("USER", "root")])
+  , (Username "alice", [("USER", "alice")])
+  , (Username "bob", [("USER", "bob")])
+  ]
+
+memoize : Text -> Nat ->{Exception, Session, FileRW, FileCO2} ()
+memoize file result =
+  su "root"
+  ino = FileCO2.create file
+  FileRW.write (ino, Nat.toText result)
+  su "alice"
+
+mv : Text -> Text ->{FileRW, FileCO, BasicIO, State FileSystemT} ()
+mv src dest =
+  use FileCO create
+  file = FileRW.read (FileCO.open src)
+  _ = create src
+  FileRW.write (create dest, file)
+
+
+runChainSwitch _ =
+  handle
+    handle handle chainSwitchArg() with env (Username "root")
+    with runState initdaniel
+  with warn
+
+runFib : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runFib _ = timeshare2 fibArg
+
+runFib_memo _ =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle handle fib_memoArg() with exitHandler
+              with scheduler (Sstate [] [] 1 2)
+            with env (Username "root")
+          with runState initdaniel
+        with fileRW
+      with fileCO2
+    with runState initialFileSystem
+  with warn
+
+-- runFileMayhem : ∀ _. _ ->{IO, Exception, FileCO2} ()
+-- runFileMayhem _ =
+--   handle
+--     handle
+--       handle handle handle fileMayhemArg() with fileCO with fileLU with fileRW
+--     with warn
+--   with runState initialFileSystem
+
+-- runTestMv : '{IO, Exception} ()
+-- runTestMv _ =
+--   handle
+--     handle handle handle handle testMv() with basicIO with fileCO with fileRW
+--     with runState initialFileSystem
+--   with warn
+
+withDefault : a -> Request {Error, e} a ->{e} a
+withDefault default = cases
+  { result }             -> result
+  { Error.throw _ -> _ } -> default
+
+
+
+---- Anything below this line is ignored by Unison.
+
+
+ability BasicIO where
+  echo : Text ->{BasicIO} ()
+
+basicIO : Request {BasicIO} a ->{IO, Exception} a
+basicIO = cases
+  { BasicIO.echo text -> resume } ->
+    putText stdOut text
+    handle resume() with basicIO
+  { result }                      -> result
+
+type Empty
+  =
+
+ability Status where
+  exit : Nat ->{Status} Empty
+
+exitHandler : Request {g, Status} a -> Nat
+exitHandler = cases
+  { result }                  -> 0
+  { Status.exit v -> resume } -> v
+
+type User
+  = Username Text
+
+ability Session where
+  su : Text ->{Session} ()
+  adduser : Text ->{Session} ()
+  setvar : Text -> Text ->{Session} ()
+  ask : Text ->{Session} Text
+
+whoami : '{Session} Text
+whoami _ = Session.ask "USER"
+
+env : User -> Request {Session} a ->{Error, State [(User, [(Text, Text)])]} a
+env user = cases
+  { result } -> result
+  { Session.ask var -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    val = lookupEnvVar var envs
+    handle resume val with env user
+  { Session.su user' -> resume } ->
+    if userExists (User.Username user') State.get() then
+      handle resume() with env (User.Username user')
+    else
+      Error.throw EType.NoSuchUser
+      handle resume() with env user
+  { Session.setvar var val -> resume } ->
+    st = State.get()
+    envs = lookupEnvs user st
+    envs' = modifyEnvVar var val envs
+    State.put (modifyEnvs user envs' st)
+    handle resume() with env user
+  { Session.adduser user' -> resume } ->
+    st = State.get()
+    newuser = User.Username user'
+    newvars = [("USER", user')]
+    newenv = modifyEnvs newuser newvars st
+    if Boolean.not (userExists newuser st) then
+      State.put newenv
+      handle resume() with env newuser
+    else
+      Error.throw EType.UserExists
+      handle resume() with env user
+
+lookupEnvVar : Text -> [(Text, Text)] -> Text
+lookupEnvVar var = cases
+  [] -> ""
+  (var', val) +: rest ->
+    if var Text.== var' then val else lookupEnvVar var rest
+
+modifyEnvVar : Text -> Text -> [(Text, Text)] -> [(Text, Text)]
+modifyEnvVar var val = cases
+  [] -> [(var, val)]
+  (var', val') +: rest ->
+    if var Text.== var' then (var, val) List.+: rest
+    else (var', val') List.+: modifyEnvVar var val rest
+
+lookupEnvs : User -> [(User, [(Text, Text)])] -> [(Text, Text)]
+lookupEnvs user = cases
+  [] -> []
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then env
+    else lookupEnvs user rest
+
+modifyEnvs :
+  User
+  -> [(Text, Text)]
+  -> [(User, [(Text, Text)])]
+  -> [(User, [(Text, Text)])]
+modifyEnvs user env = cases
+  [] -> [(user, env)]
+  (user', env') +: rest ->
+    if userToText user Text.== userToText user' then (user, env) List.+: rest
+    else (user', env') List.+: modifyEnvs user env rest
+
+userExists : User -> [(User, [(Text, Text)])] -> Boolean
+userExists user = cases
+  [] -> false
+  (user', env) +: rest ->
+    if userToText user Text.== userToText user' then true
+    else userExists user rest
+
+userToText : User -> Text
+userToText = cases User.Username username -> username
+
+initialUserspace : [(User, [(Text, Text)])]
+initialUserspace = [(User.Username "root", [("USER", "root")])]
+
+ability Interrupt where
+  interrupt : {Interrupt} ()
+
+type PState a e
+  = Paused ('{e} PState a e)
+  | Done a
+
+interruptWrite : Request {e, BasicIO} x ->{e, BasicIO, Co a} ()
+interruptWrite = cases
+  { BasicIO.echo text -> resume } ->
+    Co.uinterrupt
+    BasicIO.echo text
+    handle resume() with interruptWrite
+  { result }                      -> ()
+
+reifyProcess : Request {Interrupt, e} a -> PState a e
+reifyProcess = cases
+  { Interrupt.interrupt -> resume } ->
+    PState.Paused (_ -> (handle resume() with reifyProcess))
+  { result } -> PState.Done result
+
+ability TimeSharing where
+  fork : {TimeSharing} Boolean
+
+nondet : Request {TimeSharing} a -> [a]
+nondet = cases
+  { TimeSharing.fork -> resume } ->
+    (handle resume true with nondet) List.++ (handle resume false with nondet)
+  { result } -> [result]
+
+sched : [PState a {e, TimeSharing}] -> [a] ->{e} [a]
+sched ps done = match ps with
+  []                     -> done
+  PState.Done res +: ps' -> sched ps' (res List.+: done)
+  PState.Paused m +: ps' -> sched (ps' List.++ (handle m() with nondet)) done
+
+timeshare : '{g, Interrupt, TimeSharing} o ->{g} [o]
+timeshare m = sched [PState.Paused (_ -> (handle m() with reifyProcess))] []
+
+ability State a where
+  put : a ->{State a} ()
+  get : '{State a} a
+
+runState : a -> Request {State a} b -> (a, b)
+runState v = cases
+  { State.put v' -> resume } -> handle resume() with runState v'
+  { State.get () -> resume } -> handle resume v with runState v
+  { result }                 -> (v, result)
+
+type DirectoryT
+  = Directory (Text, Nat)
+
+type DataRegionT
+  = DataRegion (Nat, Text)
+
+type INodeT
+  = INode Nat Nat
+
+type IListT
+  = IList (Nat, INodeT)
+
+type FileSystemT
+  = FileSystem [DirectoryT] [IListT] [DataRegionT] Nat Nat
+
+initialINode : INodeT
+initialINode = INodeT.INode 0 0
+
+initialDirectory : DirectoryT
+initialDirectory = DirectoryT.Directory ("stdout", 0)
+
+initialDataRegion : DataRegionT
+initialDataRegion = DataRegionT.DataRegion (0, "")
+
+initialIList : IListT
+initialIList = IListT.IList (0, initialINode)
+
+initialFileSystem : FileSystemT
+initialFileSystem =
+  FileSystemT.FileSystem
+    [initialDirectory] [initialIList] [initialDataRegion] 1 1 -- Danny
+
+lookupINode : Nat -> [IListT] -> Either INodeT ()
+lookupINode i = cases
+  [] -> Right()
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then Left inode else lookupINode i rest
+
+lookupFName : Text -> [DirectoryT] -> Either Nat ()
+lookupFName name = cases
+  [] -> Right()
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then Left i else lookupFName name rest
+
+modifyINode : Nat -> INodeT -> [IListT] -> [IListT]
+modifyINode i inode = cases
+  [] -> []
+  IListT.IList (i', inode') +: rest ->
+    if i Nat.== i' then IListT.IList (i, inode) List.+: rest
+    else IListT.IList (i', inode') List.+: modifyINode i inode rest
+
+lookupDataRegion : Nat -> [DataRegionT] -> Either Text ()
+lookupDataRegion i = cases
+  [] -> Right()
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then Left text else lookupDataRegion i rest
+
+modifyDataRegion : Nat -> Text -> [DataRegionT] -> [DataRegionT]
+modifyDataRegion i text = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text') +: rest ->
+    if i Nat.== i' then
+      DataRegionT.DataRegion (i, text' Text.++ text) List.+: rest
+    else
+      DataRegionT.DataRegion (i', text') List.+: modifyDataRegion i text rest
+
+fread : Nat -> FileSystemT -> Either Text ()
+fread i = cases
+  FileSystemT.FileSystem directories ilists dataRegions _ _ ->
+    match lookupINode i ilists with
+      Left inode ->
+        (INodeT.INode _ dataRegion) = inode
+        match lookupDataRegion dataRegion dataRegions with
+          Left text -> Left text
+          Right ()  -> Right()
+      Right ()   -> Right()
+
+fwrite : Nat -> Text -> FileSystemT -> FileSystemT
+fwrite i text fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  (FileSystem directories ilists dataRegions dnext inext) = fs -- Danny
+  match lookupINode i ilists with
+    Left inode ->
+      (INode _ dataRegion) = inode
+      FileSystem
+        directories
+        ilists -- (modifyINode i (INode i dataRegion) ilists) -- Danny
+        (modifyDataRegion dataRegion text dataRegions)
+        dnext
+        inext
+    Right () -> fs
+
+ability FileRW where
+  write : (Nat, Text) ->{FileRW} ()
+  read : Nat ->{FileRW} Text
+
+fileRW : Request {FileRW} a ->{Error, State FileSystemT} a
+fileRW = cases
+  { FileRW.read i -> resume }          ->
+    fs = State.get()
+    text = fread i fs
+    match text with
+      Left text -> handle resume text with fileRW
+      Right ()  ->
+        Error.throw EType.FileNotFound
+        handle resume "" with fileRW
+  { FileRW.write (i, text) -> resume } ->
+    fs = State.get()
+    fs' = fwrite i text fs
+    State.put fs'
+    handle resume() with fileRW
+  { result }                           -> result
+
+fileEcho : Request {BasicIO} a ->{State FileSystemT} a
+fileEcho = cases
+  { BasicIO.echo text -> resume } ->
+    fs = State.get()
+    State.put (fwrite 0 text fs)
+    handle resume() with fileEcho
+  { result }                      -> result
+
+fopen : Text -> FileSystemT ->{Error} Nat
+fopen name = cases
+  FileSystemT.FileSystem directories ilists dataRegions dnext inext ->
+    match lookupFName name directories with
+      Left i   -> i
+      Right () ->
+        Error.throw EType.FileNotFound
+        inext
+
+has : Text -> [DirectoryT] -> Boolean
+has name = cases
+  [] -> false
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then true else has name rest
+
+fcreate : Text -> FileSystemT -> (Nat, FileSystemT)
+fcreate name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = fopen name fs
+    inode = lookupINode ino ilists
+    match inode with
+      Left inode ->
+        (INode ino loc) = inode
+        dreg' = modifyDataRegion loc "" dataRegions
+        (ino, FileSystem directories ilists dreg' dnext inext)
+      Right ()   -> (ino, fs)
+  else
+    dreg' = DataRegionT.DataRegion (dnext, "") +: dataRegions --Danny
+    inext' = inext + 1
+    dnext' = dnext + 1
+    inode = INode 1 dnext -- Danny
+    ilists' = IListT.IList (inext, inode) +: ilists
+    directories' = DirectoryT.Directory (name, inext) +: directories
+    (inext, FileSystem directories' ilists' dreg' dnext' inext')
+
+ability FileCO where
+  create : Text ->{FileCO} Nat
+  open : Text ->{FileCO} Nat
+
+fileCO : Request {FileCO} a ->{Error, State FileSystemT} a
+fileCO = cases
+  { FileCO.create name -> resume } ->
+    fs = State.get()
+    let
+      (ino, fs') = fcreate name fs
+      State.put fs'
+      handle resume ino with fileCO
+  { FileCO.open name -> resume }   ->
+    fs = State.get()
+    ino = fopen name fs
+    State.put fs
+    handle resume ino with fileCO
+  { result }                       -> result
+
+flink : Text -> Text -> FileSystemT ->{Error} FileSystemT
+flink src dest fs =
+  use Error throw
+  use FileSystemT FileSystem
+  use INodeT INode
+  use List +:
+  use Nat +
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has dest directories then fs
+  else
+    ino = lookupFName src directories
+    match ino with
+      Left ino ->
+        directories' = DirectoryT.Directory (dest, ino) +: directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            inode' = INode (ino + 1) loc -- Danny
+            ilists' = modifyINode ino inode' ilists
+            FileSystem directories' ilists' dataRegions dnext inext
+          Right ()   ->
+            throw EType.FileExists
+            fs
+      Right () ->
+        throw EType.FileNotFound
+        fs
+
+removeINode : Nat -> [IListT] -> [IListT]
+removeINode i = cases
+  [] -> []
+  IListT.IList (i', inode) +: rest ->
+    if i Nat.== i' then rest
+    else IListT.IList (i', inode) List.+: removeINode i rest
+
+removeDataRegion : Nat -> [DataRegionT] -> [DataRegionT]
+removeDataRegion i = cases
+  [] -> []
+  DataRegionT.DataRegion (i', text) +: rest ->
+    if i Nat.== i' then rest
+    else DataRegionT.DataRegion (i', text) List.+: removeDataRegion i rest
+
+removeDirectory : Text -> [DirectoryT] -> [DirectoryT]
+removeDirectory name = cases
+  [] -> []
+  DirectoryT.Directory (name', i) +: rest ->
+    if name Text.== name' then rest
+    else DirectoryT.Directory (name', i) List.+: removeDirectory name rest
+
+funlink : Text -> FileSystemT -> FileSystemT
+funlink name fs =
+  use FileSystemT FileSystem
+  use INodeT INode
+  use Nat - >
+  (FileSystem directories ilists dataRegions dnext inext) = fs
+  if has name directories then
+    ino = lookupFName name directories
+    match ino with
+      Left ino ->
+        directories' = removeDirectory name directories
+        inode = lookupINode ino ilists
+        match inode with
+          Left inode ->
+            (INode ino loc) = inode
+            if loc > 1 then
+              loc' = loc - 1
+              inode' = INode ino loc'
+              ilists' = modifyINode ino inode' ilists
+              FileSystem directories' ilists' dataRegions dnext inext
+            else
+              ilists' = removeINode ino ilists
+              dataRegions' = removeDataRegion loc dataRegions
+              FileSystem directories' ilists' dataRegions' dnext inext
+          Right ()   -> fs
+      Right () -> fs
+  else fs
+
+ability FileLU where
+  unlink : Text ->{FileLU} ()
+  link : (Text, Text) ->{FileLU} ()
+
+fileLU : Request {FileLU} a ->{Error, FileRW, State FileSystemT} a
+fileLU = cases
+  { FileLU.link (src, dest) -> resume } ->
+    fs = State.get()
+    fs' = flink src dest fs
+    State.put fs'
+    handle resume() with fileLU
+  { FileLU.unlink name -> resume }      ->
+    fs = State.get()
+    fs' = funlink name fs
+    State.put fs'
+    handle resume() with fileLU
+  { result }                            -> result
+
+fileIO m = handle handle handle m() with fileRW with fileCO with fileLU
+
+ability Await a where
+  await : '{Await a} a
+
+ability Yield b where
+  yield : b ->{Yield b} ()
+
+pipe : '{e, Yield b} a -> '{e, Await b} a ->{e} a
+pipe p c =
+  handle c()
+  with cases
+    { x }                        -> x
+    { Await.await () -> resume } -> copipe resume p
+
+copipe : (b ->{e, Await b} a) -> '{e, Yield b} a ->{e} a
+copipe c p =
+  handle p()
+  with cases
+    { x }                       -> x
+    { Yield.yield y -> resume } -> pipe resume do c y
+
+ability Co a where
+  ufork : {Co a} Nat
+  renice : Nat -> Int ->{Co a} ()
+  wait : Nat ->{Co a} ()
+  getResult : Nat ->{Co a} Optional a
+  nice : Nat ->{Co a} Int
+  uinterrupt : {Co a} ()
+
+type Proc a e
+  = Proc (Sstate a e ->{e} [(Nat, a)])
+
+type Pstate a e
+  = Blocked Nat (Proc a e)
+  | Ready (Proc a e)
+
+type Sstate a e
+  = { q : [(Nat, Pstate a e)], done : [(Nat, a)], pid : Nat, pnext : Nat }
+
+runNext : Sstate a e ->{e} [(Nat, a)]
+runNext = cases
+  Sstate.Sstate q done pid pnext ->
+    match q with
+      [] -> done
+      (pid', Pstate.Blocked pid'' resume) +: q' ->
+        runNext
+          (Sstate.Sstate
+            (q' List.++ [(pid', Pstate.Blocked pid'' resume)]) done pid pnext)
+      (pid', Pstate.Ready resume) +: q' ->
+        st' = Sstate.Sstate q' done pid' pnext
+        let
+          (Proc.Proc resume') = resume
+          resume' st'
+
+lookupResult : Nat -> [(Nat, a)] -> Optional a
+lookupResult pid = cases
+  [] -> None
+  (pid', result) +: rest ->
+    if pid Nat.== pid' then Some result else lookupResult pid rest
+
+modifyQueue : Nat -> [(Nat, Pstate a e)] -> [(Nat, Pstate a e)]
+modifyQueue pid = cases
+  [] -> []
+  (pid', pstate) +: rest ->
+    if pid Nat.== pid' then rest
+    else (pid', pstate) List.+: modifyQueue pid rest
+
+lookupNice : Nat -> [(Nat, Int)] -> Int
+lookupNice pid = cases
+  [] -> -1
+  (pid', renice) +: rest ->
+    if pid' Nat.== pid then renice else lookupNice pid rest
+
+modifyNice : Nat -> Int -> [(Nat, Int)] -> [(Nat, Int)]
+modifyNice pid renice = cases
+  [] -> [(pid, renice)]
+  (pid', renice') +: rest ->
+    if pid' Nat.== pid then (pid, renice) List.+: rest
+    else (pid', renice') List.+: modifyNice pid renice rest
+
+lowestNiceInQueue :
+  [(Nat, Int)] -> [(Nat, Pstate a e)] -> Either (Nat, Pstate a e) ()
+lowestNiceInQueue niceValues = cases
+  [] -> Right()
+  (pid, Pstate.Blocked pid' resume) +: rest ->
+    lowestNiceInQueue niceValues rest
+  (pid, Pstate.Ready resume) +: rest ->
+    use Int <
+    use Pstate Ready
+    nextnice = lookupNice pid niceValues
+    match lowestNiceInQueue niceValues rest with
+      Left (pid', pstate) ->
+        nextnice' = lookupNice pid' niceValues
+        if nextnice < nextnice' then Left (pid, Ready resume)
+        else Left (pid', pstate)
+      Right () -> Left (pid, Ready resume)
+
+runNextNice : Sstate a e -> [(Nat, Int)] ->{e} [(Nat, a)]
+runNextNice st niceValues =
+  use List ++
+  use Proc Proc
+  use Pstate Blocked Ready
+  use Sstate Sstate
+  (Sstate q done pid pnext) = st
+  match q with
+    [] -> done
+    (pid', Blocked pid'' resume) +: q' ->
+      runNextNice
+        (Sstate (q' ++ [(pid', Blocked pid'' resume)]) done pid pnext)
+        niceValues
+    (pid', Ready resume) +: q' ->
+      match lowestNiceInQueue niceValues q with
+        Left (pid', Ready resume)         ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Left (pid', Blocked pid'' resume) ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+        Right ()                          ->
+          st' = Sstate q' done pid' pnext
+          let
+            (Proc resume') = resume
+            resume' st'
+
+minNice : Int
+minNice = -20
+
+schedAging :
+  Sstate a e -> Request {Co a, e} a ->{e, State [(Nat, Int)]} [(Nat, a)]
+schedAging st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNextNice (Sstate.Sstate q done' pid pnext) State.get()
+  { Co.ufork -> resume } ->
+    use Int - <=
+    use List ++
+    use Nat +
+    use Pstate Ready
+    use Sstate Sstate
+    use State get put
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      nicevalue = lookupNice pid get()
+      if nicevalue - +1 <= minNice then
+        q' = q ++ [(pid, Ready resume')]
+        pid' = pnext
+        pnext' = pnext + 1
+        handle resume pid' with scheduler (Sstate q' done pid pnext')
+      else
+        put (modifyNice pnext nicevalue get())
+        put (modifyNice pnext (nicevalue - +1) get())
+        pid' = pnext
+        pnext' = pnext + 1
+        q' = q ++ [(pid', Ready resume')]
+        handle resume pid' with schedAging (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } ->
+    (Sstate.Sstate q done pid pnext) = st
+    nicevalue = lookupNice pid State.get()
+    handle resume nicevalue with schedAging st
+  { Co.renice pid newNice -> resume } ->
+    use Sstate Sstate
+    use State get
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      State.put (modifyNice pid newNice get())
+      runNextNice (Sstate q done pid pnext) get()
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNextNice (Sstate q' done pid pnext) State.get()
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+scheduler : Sstate a e -> Request {Co a, e} a ->{e} [(Nat, a)]
+scheduler st = cases
+  { result } ->
+    (Sstate.Sstate q done pid pnext) = st
+    use List ++
+    done' = done ++ [(pid, result)]
+    runNext (Sstate.Sstate q done' pid pnext)
+  { Co.ufork -> resume } ->
+    use List ++
+    use Nat +
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume 0 with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      pid' = pnext
+      pnext' = pnext + 1
+      q' = q ++ [(pid', Pstate.Ready resume')]
+      handle resume pid' with scheduler (Sstate q' done pid pnext')
+  { Co.wait pid -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' =
+        if processExists pid q then q ++ [(pid, Pstate.Blocked pid resume')]
+        else q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.nice pid -> resume } -> handle resume +0 with scheduler st
+  { Co.renice pid newNice -> resume } -> handle resume() with scheduler st
+  { Co.uinterrupt -> resume } ->
+    use List ++
+    use Sstate Sstate
+    resume' = Proc.Proc (st -> (handle resume() with scheduler st))
+    let
+      (Sstate q done pid pnext) = st
+      q' = q ++ [(pid, Pstate.Ready resume')]
+      runNext (Sstate q' done pid pnext)
+  { Co.getResult pid -> resume } ->
+    (Sstate.Sstate _ done _ _) = st
+    result = lookupResult pid done
+    handle resume result with scheduler st
+
+processExists : Nat -> [(Nat, Pstate a e)] -> Boolean
+processExists pid = cases
+  [] -> false
+  (pid', process) +: rest ->
+    if pid Nat.== pid' then true else processExists pid rest
+
+timeshare2 : '{g, Co a} a ->{g} [(Nat, a)]
+timeshare2 m = handle m() with scheduler (Sstate.Sstate [] [] 1 2)
+
+init : '{e} a ->{e, Co a} ()
+init main =
+  use Nat ==
+  pid = Co.ufork
+  if pid == 0 then
+    a = main()
+    ()
+  else Co.wait pid
+
+type Permission
+  = Read
+  | Write
+  | AddUser
+  | Grant
+  | Revoke
+  | Execute
+
+all : [Permission]
+all =
+  [ Permission.Read
+  , Permission.Write
+  , Permission.AddUser
+  , Permission.Grant
+  , Permission.Revoke
+  , Permission.Execute
+  ]
+
+ability Permit where
+  grant : Text -> Permission ->{Permit} ()
+  revoke : Text -> Permission ->{Permit} ()
+
+checkPermission :
+  User -> Permission -> [(Text, [Permission])] ->{IO, Exception, Error} ()
+checkPermission user required = cases
+  [] -> Error.throw EType.PermissionDenied
+  (user', perms') +: rest ->
+    if userToText user Text.== user' then
+      if allowed required perms' then ()
+      else Error.throw EType.PermissionDenied
+    else checkPermission user required rest
+
+permissions :
+  User
+  -> Request {e, Permit, Session, FileRW, FileLU, FileCO, Co a} a
+  ->{e,
+  IO,
+  Exception,
+  Session,
+  Error,
+  FileRW,
+  FileLU,
+  FileCO,
+  Co a,
+  State [(Text, [Permission])]} a
+permissions user = cases
+  { Permit.grant user' perm -> resume }  ->
+    use List +:
+    use State get
+    checkPermission user Permission.Grant get()
+    existingPerms = lookupPermission user' get()
+    newPerms = perm +: existingPerms
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Permit.revoke user' perm -> resume } ->
+    use State get
+    checkPermission user Permission.Revoke get()
+    newPerms = removePermission perm (lookupPermission user' get())
+    State.put (modifyPermission user' newPerms get())
+    handle resume() with permissions user
+  { Session.ask var -> resume }          ->
+    checkPermission user Permission.Read State.get()
+    answer = Session.ask var
+    handle resume answer with permissions user
+  { Session.su user' -> resume }         ->
+    Session.su user'
+    handle resume() with permissions (User.Username user')
+  { Session.adduser user' -> resume }    ->
+    checkPermission user Permission.AddUser State.get()
+    Session.adduser user'
+    handle resume() with permissions user
+  { Session.setvar var val -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    Session.setvar var val
+    handle resume() with permissions user
+  { FileRW.read i -> resume }            ->
+    checkPermission user Permission.Read State.get()
+    text = FileRW.read i
+    handle resume text with permissions user
+  { FileRW.write (i, text) -> resume }   ->
+    checkPermission user Permission.Write State.get()
+    FileRW.write (i, text)
+    handle resume() with permissions user
+  { FileLU.link (src, dest) -> resume }  ->
+    checkPermission user Permission.Write State.get()
+    FileLU.link (src, dest)
+    handle resume() with permissions user
+  { FileLU.unlink name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    FileLU.unlink name
+    handle resume() with permissions user
+  { FileCO.create name -> resume }       ->
+    checkPermission user Permission.Write State.get()
+    ino = FileCO.create name
+    handle resume ino with permissions user
+  { FileCO.open name -> resume }         ->
+    checkPermission user Permission.Read State.get()
+    ino = FileCO.open name
+    handle resume ino with permissions user
+  { Co.ufork -> resume }                 ->
+    checkPermission user Permission.Execute State.get()
+    pid = Co.ufork
+    handle resume pid with permissions user
+  { Co.nice pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    nicevalue = Co.nice pid
+    handle resume nicevalue with permissions user
+  { Co.renice pid newnice -> resume }    ->
+    checkPermission user Permission.Execute State.get()
+    Co.renice pid newnice
+    handle resume() with permissions user
+  { Co.wait pid -> resume }              ->
+    checkPermission user Permission.Execute State.get()
+    Co.wait pid
+    handle resume() with permissions user
+  { Co.uinterrupt -> resume }            ->
+    checkPermission user Permission.Execute State.get()
+    Co.uinterrupt
+    handle resume() with permissions user
+  { Co.getResult pid -> resume }         ->
+    checkPermission user Permission.Execute State.get()
+    result = Co.getResult pid
+    handle resume result with permissions user
+  { result }                             -> result
+
+lookupPermission : Text -> [(Text, [Permission])] -> [Permission]
+lookupPermission var = cases
+  [] -> []
+  (var', perms') +: rest ->
+    if var Text.== var' then perms' else lookupPermission var rest
+
+modifyPermission :
+  Text -> [Permission] -> [(Text, [Permission])] -> [(Text, [Permission])]
+modifyPermission var perms = cases
+  [] -> [(var, perms)]
+  (var', perms'') +: rest ->
+    if var Text.== var' then (var, perms) List.+: rest
+    else (var', perms'') List.+: modifyPermission var perms rest
+
+removePermission : Permission -> [Permission] -> [Permission]
+removePermission perm = cases
+  [] -> []
+  perm' +: rest ->
+    if permEquals perm perm' then rest
+    else perm' List.+: removePermission perm rest
+
+allowed : Permission -> [Permission] -> Boolean
+allowed perm = cases
+  []            -> false
+  perm' +: rest -> if permEquals perm perm' then true else allowed perm rest
+
+permEquals : Permission -> Permission -> Boolean
+permEquals perms1 perms2 = match perms1 with
+  Permission.Read    ->
+    match perms2 with
+      Permission.Read -> true
+      _               -> false
+  Permission.Write   ->
+    match perms2 with
+      Permission.Write -> true
+      _                -> false
+  Permission.AddUser ->
+    match perms2 with
+      Permission.AddUser -> true
+      _                  -> false
+  Permission.Grant   ->
+    match perms2 with
+      Permission.Grant -> true
+      _                -> false
+  Permission.Revoke  ->
+    match perms2 with
+      Permission.Revoke -> true
+      _                 -> false
+  Permission.Execute ->
+    match perms2 with
+      Permission.Execute -> true
+      _                  -> false
+
+initialPermissions : [(Text, [Permission])]
+initialPermissions = [("root", all)]
+
+type EType
+  = PermissionDenied
+  | FileNotFound
+  | FileExists
+  | UserExists
+  | NoSuchUser
+  | UnknownError
+
+toText : EType -> Text
+toText = cases
+  EType.PermissionDenied -> "Permission denied"
+  EType.FileNotFound     -> "File not found"
+  EType.FileExists       -> "File exists"
+  EType.UserExists       -> "User exists"
+  EType.NoSuchUser       -> "No such user"
+  EType.UnknownError     -> "Unknown error"
+
+ability Error where
+  throw : EType ->{Error} ()
+
+fail : Request {e, Error} a ->{e, IO, Exception, Status} Empty
+fail = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    Status.exit 1
+  { result }                    -> Status.exit 0
+
+warn : Request {e, Error} a ->{e, IO, Exception} a
+warn = cases
+  { Error.throw err -> resume } ->
+    printLine (toText err)
+    handle resume() with warn
+  { result }                    -> result
+
+nondet2 : Request {TimeSharing} a -> [a]
+nondet2 = cases
+  { TimeSharing.fork -> resume } ->
+    use Nat !=
+    pid = Co.ufork
+    handle resume (pid != 0) with nondet2
+  { result }                     -> [result]
+
+unix :
+  '{e, Session, Error, FileRW, FileLU, FileCO, BasicIO, Co a} a
+  ->{e, IO, Exception} [(Nat, Nat)]
+unix m =
+  handle
+    handle
+      handle
+        handle
+          handle
+            handle
+              handle
+                handle
+                  handle
+                    handle handle m with env (User.Username "root")
+                    with runState initialUserspace
+                  with fileCO
+                with fileLU
+              with fileRW
+            with runState initialFileSystem
+          with interruptWrite
+        with basicIO
+      with warn
+    with exitHandler
+  with scheduler (Sstate.Sstate [] [] 1 2)
+
+-- The definitions below no longer typecheck with the changes above.
+-- Please fix the errors and try `update` again.
+
+cat : Text ->{FileRW, FileCO, BasicIO} ()
+cat name = echo (FileRW.read (FileCO.open name))
+
+catTest : ∀ _. _ ->{FileRW, FileCO, BasicIO} ()
+catTest _ =
+  FileRW.write (FileCO.open "test.txt", "Hello, World!")
+  cat "test.txt"
+
+envVariables : ∀ _. _ ->{Session, BasicIO} ()
+envVariables _ =
+--   use Permission Read
+  use Session ask
+  echo whoami()
+  echo "\n"
+  adduser "alice"
+--   grant "alice" Permission.Write
+--   grant "alice" Read
+--   grant "alice" AddUser
+--   grant "alice" Grant
+  su "alice"
+  echo (ask "HOME")
+  echo "\n"
+  adduser "bob"
+--   grant "bob" Read
+  adduser "bob"
+  su "bob"
+  echo (ask "HOME")
+
+envVariablesTest : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+envVariablesTest _ = unix envVariables
+
+hamlet : ∀ _. _ ->{BasicIO} ()
+hamlet _ =
+  echo "To be, or not to be,\n"
+  echo "that is the question:\n"
+  echo "Wether 'tis nobler in the mind to suffer\n"
+
+multiHandlers : ∀ _. _ ->{BasicIO} ()
+multiHandlers _ =
+  echo "Hello,"
+  echo " World!\n"
+
+-- mv : Text -> Text ->{FileRW, FileCO, BasicIO, State FileSystemT} ()
+-- mv src dest =
+--   file = FileRW.read (FileCO.open src)
+--   _ = create src
+--   FileRW.write (create dest, file)
+
+proc : ∀ _. _ ->{Co a, Session, BasicIO} ()
+proc _ =
+  use Nat ==
+  pid = ufork
+  if pid == 0 then ritchie()
+  else
+    su "bob"
+    Co.wait pid
+    hamlet()
+
+ritchie : ∀ _. _ ->{BasicIO} ()
+ritchie _ =
+  echo "UNIX is basically\n"
+  echo "a simple operating system\n"
+  echo "but you have to be a genius to understand the simplicity\n"
+
+runCat : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runCat _ = unix catTest
+
+runMultiHandlers : ∀ _. _ ->{IO, Exception} ()
+runMultiHandlers _ = handle multiHandlers() with basicIO
+
+runProc : ∀ _. _ ->{IO, Exception} [(Nat, Nat)]
+runProc _ = unix proc
+
+-- runTestMv : '{IO, Exception} ()
+-- runTestMv _ =
+--   handle
+--     handle handle handle handle testMv() with basicIO with fileCO with fileRW
+--     with runState initialFileSystem
+--   with warn
+
+testMv : '{FileRW, FileCO, BasicIO, State FileSystemT} ()
+testMv _ =
+  use FileCO open
+  _ = FileRW.write (open "test.txt", "Hello, World!")
+  mv "test.txt" "test2.txt"
+  echo (FileRW.read (open "test2.txt"))
+  echo "\n"
+
+
+
+---- Anything below this line is ignored by Unison.
+
+
+{-
+    BasicIO
+    =========
+-}
+
+unique ability BasicIO
+    where
+        echo: Text -> ()
+
+basicIO : Request {BasicIO} a ->{IO, Exception} a
+basicIO result =
+    match result with
+        { echo text -> resume } -> putText stdOut text; handle resume () with basicIO
+        { result } -> result
+
+
+{-
+    Status
+    =========
+-}
+
+unique type Empty =
+
+-- The unix exit command that allows you to exit with error code
+unique ability Status
+       where
+            exit: Nat -> Empty
+
+-- handles the exit command which just returns an integer
+exitHandler : Request {g, Status} a -> Nat
+exitHandler request =
+    match request with
+          { result } -> 0
+          { exit v -> resume } -> v
+
+{-
+Userspace
+==========
+
+This handles the hard coded users and their environments.
+It allows for whoami and su commands to be run.
+
+-}
+
+-- The users (hard coded)
+unique type User = Username Text
+
+unique ability Session
+    where
+        su: Text -> ()
+        ask: Text -> Text
+        setvar: Text -> Text -> ()
+        adduser: Text -> ()
+
+whoami: '{Session} Text
+whoami _ = ask "USER"
+
+env: User -> Request {Session} a ->{Error, State [(User, [(Text, Text)])]} a
+env user request =
+    match request with
+        {result} -> result
+
+        { Session.ask var -> resume } ->
+           let st = get ()
+               envs = lookupEnvs user st
+               val = lookupEnvVar var envs
+               handle resume val with env user
+
+        {su user' -> resume} ->
+            if userExists (Username user') (get ()) then
+                handle resume () with env (Username user')
+            else
+                Error.throw NoSuchUser
+                handle resume () with env user   -- fail
+
+        {setvar var val -> resume} ->
+            let st = get ()
+                envs = lookupEnvs user st
+                envs' = modifyEnvVar var val envs
+                State.put (modifyEnvs user envs' st)
+                handle resume () with env user
+
+        {adduser user' -> resume} ->
+            let st = get ()
+                newuser = (Username user')
+                newvars = [("USER", user')]
+                newenv = modifyEnvs newuser newvars st
+                if not (userExists newuser st) then
+                    State.put newenv
+                    handle resume () with env newuser
+                else
+                    Error.throw UserExists
+                    handle resume () with env user
+
+lookupEnvVar: Text -> [(Text, Text)] -> Text
+lookupEnvVar var env =
+    match env with
+        [] -> ""
+        (var', val) +: rest ->
+            if var == var' then val
+            else lookupEnvVar var rest
+
+modifyEnvVar: Text -> Text -> [(Text, Text)] -> [(Text, Text)]
+modifyEnvVar var val env =
+    match env with
+        [] -> [(var, val)]
+        (var', val') +: rest ->
+            if var == var' then (var, val) +: rest
+            else (var', val') +: modifyEnvVar var val rest
+
+lookupEnvs: User -> [(User, [(Text, Text)])] -> [(Text, Text)]
+lookupEnvs user envs =
+    match envs with
+        [] -> []
+        (user', env) +: rest ->
+            if userToText user == userToText user' then env
+            else lookupEnvs user rest
+
+modifyEnvs: User -> [(Text, Text)] -> [(User, [(Text, Text)])] -> [(User, [(Text, Text)])]
+modifyEnvs user env envs =
+    match envs with
+        [] -> [(user, env)]
+        (user', env') +: rest ->
+            if userToText user == userToText user' then (user, env) +: rest
+            else (user', env') +: modifyEnvs user env rest
+
+userExists: User -> [(User, [(Text, Text)])] -> Boolean
+userExists user envs =
+    match envs with
+        [] -> false
+        (user', env) +: rest ->
+            if userToText user == userToText user' then true
+            else userExists user rest
+
+userToText: User -> Text
+userToText user =
+    let (Username username) = user
+        username
+
+initialUserspace : [(User, [(Text, Text)])]
+initialUserspace = [(Username "root", [("USER", "root")] )]
+
+{-
+      Time Sharing
+   ==================
+-}
+
+unique ability Interrupt
+    where
+        interrupt: {Interrupt } ()
+
+
+unique type PState a e = Done a | Paused ('{e} PState a e)
+
+interruptWrite : Request {e, BasicIO} x ->{e, Co a, BasicIO} ()
+interruptWrite result =
+    match result with
+        { echo text -> resume } ->
+            uinterrupt
+            echo text
+            handle resume () with interruptWrite
+        { result } -> ()
+
+reifyProcess : Request {Interrupt, e} a -> PState a e
+reifyProcess request =
+    match request with
+        { interrupt -> resume } -> Paused (_ -> handle !resume with reifyProcess )
+        { result } -> Done result
+
+unique ability TimeSharing
+    where
+        fork: {TimeSharing } Boolean
+
+-- handler for time sharing ability
+nondet : Request {TimeSharing} a -> [a]
+nondet request =
+    match request with
+        { fork -> resume } -> (handle resume true with nondet) lib.base.data.List.++ (handle resume false with nondet)
+        { result } -> [result]
+
+sched : [PState a {e, TimeSharing}] -> [a] ->{e} [a]
+sched ps done =
+    match ps with
+        [] -> done
+        (Done res) +: ps' -> sched ps' (res lib.base.data.List.+: done)
+        (Paused m) +: ps' -> sched (ps' lib.base.data.List.++ (handle !m with nondet)) done
+
+timeshare : '{g, Interrupt, TimeSharing} o ->{g} [o]
+timeshare m = sched [Paused (_ -> handle !m with reifyProcess)] []
+
+{-
+  Serial File System
+  ==================
+-}
+
+unique ability State a
+       where
+            put: a -> ()
+            get: () -> a
+
+runState : a -> Request {State a} b -> b
+runState v request =
+    match request with
+        { State.put v' -> resume } -> handle resume () with runState v'
+        { State.get () -> resume } -> handle resume v with runState v
+        { result } -> result
+
+unique type DirectoryT = Directory (Text, Nat)
+unique type DataRegionT = DataRegion (Nat, Text)
+unique type INodeT = INode Nat Nat
+unique type IListT = IList (Nat, INodeT)
+unique type FileSystemT = FileSystem (List DirectoryT) (List IListT) (List DataRegionT) Nat Nat
+
+
+initialINode : INodeT
+initialINode = INode 0 0
+
+initialDirectory : DirectoryT
+initialDirectory = (Directory ("stdout", 0))
+
+
+initialDataRegion : DataRegionT
+initialDataRegion = DataRegion (0, "")
+
+initialIList : IListT
+initialIList = IList (0, initialINode)
+
+initialFileSystem : FileSystemT
+initialFileSystem = FileSystem [initialDirectory] [initialIList] [initialDataRegion] 0 0
+
+lookupINode : Nat -> [IListT] -> Either INodeT ()
+lookupINode i ilists =
+    match ilists with
+        [] -> Right ()
+        (IList (i', inode)) +: rest ->
+            if i == i' then Left inode
+            else lookupINode i rest
+
+lookupFName : Text -> [DirectoryT] -> Either Nat ()
+lookupFName name directories =
+    match directories with
+        [] -> Right ()
+        (Directory (name', i)) +: rest ->
+            if name == name' then Left i
+            else lookupFName name rest
+
+modifyINode : Nat -> INodeT -> [IListT] -> [IListT]
+modifyINode i inode ilists =
+    match ilists with
+        [] -> []
+        (IList (i', inode')) +: rest ->
+            if i == i' then (IList (i, inode)) +: rest
+            else (IList (i', inode')) +: modifyINode i inode rest
+
+lookupDataRegion : Nat -> [DataRegionT] -> Either Text ()
+lookupDataRegion i dataRegions =
+    match dataRegions with
+        [] -> Right ()
+        (DataRegion (i', text)) +: rest ->
+            if i == i' then Left text
+            else lookupDataRegion i rest
+
+modifyDataRegion : Nat -> Text -> [DataRegionT] -> [DataRegionT]
+modifyDataRegion i text dataRegions =
+    match dataRegions with
+        [] -> []
+        (DataRegion (i', text')) +: rest ->
+            if i == i' then (DataRegion (i, (text' ++ text))) +: rest
+            else (DataRegion (i', text')) +: modifyDataRegion i text rest
+
+-- fread, implementation of system read
+fread : Nat -> FileSystemT -> Either Text ()
+fread i fs =
+    match fs with
+        FileSystem directories ilists dataRegions _ _ ->
+            match lookupINode i ilists with
+                Left inode ->
+                    match inode with
+                        INode _ dataRegion ->
+                            match lookupDataRegion dataRegion dataRegions with
+                                Left text -> Left text
+                                Right () -> Right ()
+                Right () -> Right ()
+
+-- fwrite, writes to the file system at the given inode with the given text
+fwrite : Nat -> Text -> FileSystemT -> FileSystemT
+fwrite i text fs =
+    match fs with
+        FileSystem directories ilists dataRegions _ _ ->
+            match lookupINode i ilists with
+                Left inode ->
+                    match inode with
+                        INode _ dataRegion ->
+                            FileSystem directories (modifyINode i (INode i dataRegion) ilists) (modifyDataRegion dataRegion text dataRegions) 0 0
+                Right () -> fs
+
+unique ability FileRW
+         where
+                read: Nat -> {FileRW } Text
+                write: (Nat, Text) -> {FileRW } ()
+
+fileRW : Request {FileRW} a ->{State FileSystemT, Error} a
+fileRW result =
+    match result with
+        { read i -> resume } ->
+            let fs = get ()
+                text = fread i fs
+                match text with
+                    Left text -> handle resume text with fileRW
+                    Right () ->
+                        Error.throw FileNotFound
+                        handle resume "" with fileRW
+        { write (i, text) -> resume } ->
+            let fs = get ()
+                fs' = fwrite i text fs
+                State.put fs'
+                handle resume () with fileRW
+        { result } -> result
+
+
+fileEcho: Request {BasicIO} a ->{State FileSystemT} a
+fileEcho m = match m with
+    { echo text -> resume } ->
+        let fs = get ()
+            State.put (fwrite 0 text fs)
+            handle resume () with fileEcho
+    { result } -> result
+
+
+fopen : Text -> FileSystemT ->{Error} Nat
+fopen name fs =
+    match fs with
+        FileSystem directories ilists dataRegions dnext inext ->
+            match lookupFName name directories with
+                Left i -> i
+                Right () ->
+                    Error.throw FileNotFound
+                    inext
+
+has : Text -> [DirectoryT] -> Boolean
+has name directories =
+    match directories with
+        [] -> false
+        (Directory (name', i)) +: rest ->
+            if name == name' then true
+            else has name rest
+
+fcreate : Text -> FileSystemT -> (Nat, FileSystemT)
+fcreate name fs =
+    match fs with
+        FileSystem directories ilists dataRegions dnext inext ->
+            -- file already exists, overwrite it
+            if has name directories then
+                let ino = (fopen name fs)
+                    inode = lookupINode ino ilists
+                    match inode with
+                        Left inode ->
+                            match inode with
+                                INode ino loc ->
+                                    let dreg' = modifyDataRegion loc "" dataRegions
+                                        (ino , FileSystem directories ilists dreg' dnext inext)
+                        Right () -> (ino, fs) -- unreacable
+            else
+                let inext' = inext + 1
+                    dnext' = dnext + 1
+                    inode = INode inext dnext
+                    ilists' = (IList (inext, inode)) +: ilists
+                    directories' = (Directory (name, inext)) +: directories
+                    (inext, FileSystem directories' ilists' dataRegions dnext' inext')
+
+unique ability FileCO
+    where
+        create: Text -> Nat
+        open: Text -> Nat
+
+fileCO : Request {FileCO} a ->{FileRW, State FileSystemT, Error} a
+fileCO result =
+    match result with
+        { create name -> resume } ->
+            let fs = get ()
+                (ino, fs') = fcreate name fs
+                State.put fs'
+                handle resume ino with fileCO
+        { open name -> resume } ->
+            let fs = get ()
+                ino = fopen name fs
+                State.put fs
+                handle resume ino with fileCO
+        { result } -> result
+
+flink: Text -> Text -> FileSystemT ->{Error} FileSystemT
+flink src dest fs =
+    match fs with
+        FileSystem directories ilists dataRegions dnext inext ->
+            if has dest directories then
+               fs -- error, file exists
+            else
+                let ino = lookupFName src directories
+                    match ino with
+                        Left ino ->
+                            let directories' = (Directory (dest, ino)) +: directories
+                                inode = lookupINode ino ilists
+                                match inode with
+                                    Left inode ->
+                                        match inode with
+                                            INode ino loc ->
+                                                  let loc' = loc + 1
+                                                      inode' = INode ino loc'
+                                                      ilists' = modifyINode ino inode' ilists
+                                                      FileSystem directories' ilists' dataRegions dnext inext
+                                    Right () ->
+                                        Error.throw FileExists
+                                        fs -- unreachable, we know the file exists
+                        Right () ->
+                            Error.throw FileNotFound
+                            fs -- no such file src
+
+removeINode : Nat -> [IListT] -> [IListT]
+removeINode i ilists =
+    match ilists with
+        [] -> []
+        (IList (i', inode)) +: rest ->
+            if i == i' then rest
+            else (IList (i', inode)) +: removeINode i rest
+
+removeDataRegion : Nat -> [DataRegionT] -> [DataRegionT]
+removeDataRegion i dataRegions =
+    match dataRegions with
+        [] -> []
+        (DataRegion (i', text)) +: rest ->
+            if i == i' then rest
+            else (DataRegion (i', text)) +: removeDataRegion i rest
+
+removeDirectory : Text -> [DirectoryT] -> [DirectoryT]
+removeDirectory name directories =
+    match directories with
+        [] -> []
+        (Directory (name', i)) +: rest ->
+            if name == name' then rest
+            else (Directory (name', i)) +: removeDirectory name rest
+
+funlink: Text -> FileSystemT -> FileSystemT
+funlink name fs =
+    match fs with
+        FileSystem directories ilists dataRegions dnext inext ->
+            if has name directories then
+                let ino = lookupFName name directories
+                    match ino with
+                        Left ino ->
+                             let directories' = removeDirectory name directories
+                                 inode = lookupINode ino ilists
+                                 match inode with
+                                        Left inode ->
+                                            match inode with
+                                                INode ino loc ->
+                                                    if loc > 1 then
+                                                        let loc' = loc - 1
+                                                            inode' = INode ino loc'
+                                                            ilists' = modifyINode ino inode' ilists
+                                                            FileSystem directories' ilists' dataRegions dnext inext
+                                                    else
+                                                        let ilists' = removeINode ino ilists
+                                                            dataRegions' = removeDataRegion loc dataRegions
+                                                            FileSystem directories' ilists' dataRegions' dnext inext
+                                        Right () -> fs -- unreachable, we know the file exists
+                        Right () -> fs -- no such file src
+            else
+                fs -- no such file
+
+
+unique ability FileLU
+       where
+            link: (Text, Text) -> {FileLU } ()
+            unlink: Text -> {FileLU } ()
+
+fileLU : Request {FileLU} a ->{FileRW, State FileSystemT, Error} a
+fileLU result =
+    match result with
+        { link (src, dest) -> resume } ->
+            let fs = get ()
+                fs' = flink src dest fs
+                State.put fs'
+                handle resume () with fileLU
+        { unlink name -> resume } ->
+            let fs = get ()
+                fs' = funlink name fs
+                State.put fs'
+                handle resume () with fileLU
+        { result } -> result
+
+fileIO m = handle (handle (handle !m with fileRW) with fileCO) with fileLU
+
+
+{-
+    pipes
+    ======
+-}
+
+unique ability Await a
+    where
+        await: () -> a
+
+unique ability Yield b
+    where
+        yield: b -> ()
+
+pipe : ('{Yield b, e} a) -> ('{Await b, e} a) ->{e} a
+pipe p c = handle c () with
+                (cases
+                    { x } -> x
+                    { await () -> resume } -> copipe (resume) p)
+
+copipe : (b -> {Await b, e} a) -> ('{Yield b, e} a) ->{e} a
+copipe c p = handle p () with
+                (cases
+                    { x } -> x
+                    { yield y -> resume } -> pipe resume '(c y) )
+
+{-
+    Process Syncronization
+    ======================
+-}
+
+unique ability Co a
+    where
+        ufork: Nat
+        wait: Nat -> ()
+        uinterrupt: ()
+        nice: Nat -> Int
+        renice: Nat -> Int -> ()
+        getResult: Nat -> Optional a
+
+unique type Proc a e = Proc (Sstate a e ->{e} List (Nat, a))
+unique type Pstate a e = Ready (Proc a e) | Blocked Nat (Proc a e)
+unique type Sstate a e = {q: List (Nat, Pstate a e), done: List (Nat, a), pid: Nat, pnext: Nat}
+
+runNext: Sstate a e ->{e} List (Nat, a)
+runNext st =
+    let (Sstate q done pid pnext) = st
+        match q with
+            [] -> done
+            (pid', Blocked pid'' resume) +: q' ->
+                runNext (Sstate (q' lib.base.data.List.++ [(pid', Blocked pid'' resume)]) done pid pnext)
+            (pid', Ready resume) +: q' ->
+                let st' = (Sstate q' done pid' pnext)
+                    Proc (resume') = resume
+                    resume' st'
+
+lookupResult: Nat -> [(Nat, a)] -> Optional a
+lookupResult pid done =
+    match done with
+        [] -> None
+        (pid', result) +: rest ->
+            if pid == pid' then Some result
+            else lookupResult pid rest
+
+modifyQueue: Nat -> [(Nat, Pstate a e)] -> [(Nat, Pstate a e)]
+modifyQueue pid q =
+    match q with
+        [] -> []
+        (pid', pstate) +: rest ->
+            if pid == pid' then rest
+            else (pid', pstate) +: modifyQueue pid rest
+
+lookupNice: Nat -> [(Nat, Int)] -> Int
+lookupNice pid prio =
+    match prio with
+        [] -> -1 -- maybe warn here
+        (pid', renice) +: rest ->
+            if pid' == pid then
+                renice
+            else
+                lookupNice pid rest
+
+modifyNice: Nat -> Int -> [(Nat, Int)] -> [(Nat, Int)]
+modifyNice pid renice prio =
+    match prio with
+        [] -> [(pid, renice)]
+        (pid', renice') +: rest ->
+            if pid' == pid then
+                (pid, renice) +: rest
+            else
+                (pid', renice') +: modifyNice pid renice rest
+
+lowestNiceInQueue: [(Nat, Int)] -> [(Nat, Pstate a e)] -> Either (Nat, Pstate a e) ()
+lowestNiceInQueue niceValues q =
+    match q with
+        [] -> Right ()
+        (pid, Blocked pid' resume) +: rest ->
+            lowestNiceInQueue niceValues rest
+        (pid, Ready resume) +: rest ->
+            let nextnice = lookupNice pid niceValues
+                match lowestNiceInQueue niceValues rest with
+                    Left (pid', pstate) ->
+                        let nextnice' = lookupNice pid' niceValues
+                            if nextnice < nextnice' then
+                                Left (pid, Ready resume)
+                            else
+                                Left (pid', pstate)
+                    Right () ->
+                        Left (pid, Ready resume)
+
+runNextNice: Sstate a e -> [(Nat, Int)] ->{e} List (Nat, a)
+runNextNice st niceValues =
+    let (Sstate q done pid pnext) = st
+        match q with
+            [] -> done
+            (pid', Blocked pid'' resume) +: q' ->
+                runNextNice (Sstate (q' lib.base.data.List.++ [(pid', Blocked pid'' resume)]) done pid pnext) niceValues
+            (pid', Ready resume) +: q' ->
+                match lowestNiceInQueue niceValues q with
+                    Left (pid', Ready resume) ->
+                        let st' = (Sstate q' done pid' pnext)
+                            Proc (resume') = resume
+                            resume' st'
+                    Left (pid', Blocked pid'' resume) ->             -- unreachable
+                        let st' = (Sstate q' done pid' pnext)
+                            Proc (resume') = resume
+                            resume' st'
+                    Right () ->
+                        let st' = (Sstate q' done pid' pnext)
+                            Proc (resume') = resume
+                            resume' st'
+
+minNice : Int
+minNice = -20
+
+schedAging: Sstate a e -> Request {Co a, e} a ->{e, State [(Nat, Int)]} List (Nat, a)
+schedAging st request = match request with
+    {result} ->
+        let (Sstate q done pid pnext) = st
+            done' = done lib.base.data.List.++ [(pid, result)]
+            runNextNice (Sstate q done' pid pnext) !get
+    { ufork -> resume } ->
+        let resume' = (Proc (st -> handle resume 0 with scheduler st))
+            (Sstate q done pid pnext) = st
+            nicevalue = lookupNice pid !get
+
+            -- simple heuristic to avoid starvation, switch back to round robin if we reach min nice
+            if nicevalue - +1 <= minNice then
+                let q' = q lib.base.data.List.++ [(pid, Ready resume')]
+                    pid' = pnext
+                    pnext' = pnext + 1
+                    handle resume pid' with scheduler (Sstate q' done pid pnext')
+            else
+                State.put (modifyNice pnext nicevalue !get)
+                State.put (modifyNice pnext (nicevalue - +1) !get)
+
+                pid' = pnext
+                pnext' = pnext + 1
+
+                q' = q lib.base.data.List.++ [(pid', Ready resume')]
+                handle resume pid' with schedAging (Sstate q' done pid pnext)
+
+    { nice pid -> resume } ->
+        let (Sstate q done pid pnext) = st
+            nicevalue = lookupNice pid !get
+            handle resume nicevalue with schedAging st
+
+    { renice pid newNice -> resume} ->
+        let resume' = (Proc (st -> handle resume () with scheduler st))
+            (Sstate q done pid pnext) = st
+            State.put (modifyNice pid newNice !get)
+            runNextNice (Sstate q done pid pnext) !get
+
+    { Co.wait pid -> resume } ->
+        let resume' = (Proc (st -> handle resume () with scheduler st))
+            (Sstate q done pid pnext) = st
+            q' = if processExists pid q then
+                     q lib.base.data.List.++ [(pid, Blocked pid resume')]
+                 else q lib.base.data.List.++ [(pid, Ready resume')]
+            runNextNice (Sstate q' done pid pnext) !get
+    { uinterrupt -> resume } ->
+        let resume' = (Proc (st -> handle resume () with scheduler st))
+            (Sstate q done pid pnext) = st
+            q' = q lib.base.data.List.++ [(pid, Ready resume')]
+            runNextNice (Sstate q' done pid pnext) !get
+    { getResult pid -> resume} ->
+        let (Sstate _ done _ _) = st
+            result = lookupResult pid done
+            handle resume result with scheduler st
+
+scheduler: Sstate a e -> Request {Co a, e} a ->{e} List (Nat, a)
+scheduler st request = match request with
+    { result } ->
+        let (Sstate q done pid pnext) = st
+            done' = done lib.base.data.List.++ [(pid, result)]
+            runNext (Sstate q done' pid pnext)
+    { ufork -> resume } ->
+        let resume' = (Proc (st -> handle resume 0 with scheduler st))
+            (Sstate q done pid pnext) = st
+            pid' = pnext
+            pnext' = pnext + 1
+            q' = q lib.base.data.List.++ [(pid', Ready resume')]
+            handle resume pid' with scheduler (Sstate q' done pid pnext')
+    { Co.wait pid -> resume } ->
+        let resume' = (Proc (st -> handle resume () with scheduler st))
+            (Sstate q done pid pnext) = st
+            q' = if processExists pid q then
+                     q lib.base.data.List.++ [(pid, Blocked pid resume')]
+                 else q lib.base.data.List.++ [(pid, Ready resume')]
+            runNext (Sstate q' done pid pnext)
+
+    { nice pid -> resume } ->
+        handle resume +0 with scheduler st
+
+    {renice pid newNice -> resume} ->
+        handle resume () with scheduler st
+
+    { uinterrupt -> resume } ->
+        let resume' = (Proc (st -> handle resume () with scheduler st))
+            (Sstate q done pid pnext) = st
+            q' = q lib.base.data.List.++ [(pid, Ready resume')]
+            runNext (Sstate q' done pid pnext)
+    { getResult pid -> resume} ->
+        let (Sstate _ done _ _) = st
+            result = lookupResult pid done
+            handle resume result with scheduler st
+
+processExists: Nat -> [(Nat, Pstate a e)] -> Boolean
+processExists pid processes =
+    match processes with
+        [] -> false
+        (pid', process) +: rest ->
+            if pid == pid' then true
+            else processExists pid rest
+
+timeshare2 : '{g, Co a} a ->{g} List (Nat, a)
+timeshare2 m = handle !m with scheduler (Sstate [] [] 1 2)
+
+init: '{e} a ->{e, Co a} ()
+init main = let pid = ufork
+                if pid == 0 then
+                    let a = main ()
+                        ()
+                else
+                    wait pid
+
+
+{-
+    Permissions
+    ============
+-}
+
+unique type Permission = Read | Write | AddUser | Grant | Revoke | Execute
+
+all : [Permission]
+all = [Read, Write, AddUser, Grant, Revoke, Execute]
+
+unique ability Permit
+    where
+        grant: Text -> Permission -> ()
+        revoke: Text -> Permission -> ()
+
+checkPermission : User -> Permission -> [(Text, [Permission])] ->{e, Error, IO, Exception} ()
+checkPermission user required perms =
+    match perms with
+        [] -> Error.throw PermissionDenied
+        (user', perms') +: rest ->
+            if userToText user == user' then
+                if allowed required perms' then
+                    ()
+                else
+                    Error.throw PermissionDenied
+            else checkPermission user required rest
+
+permissions: User -> Request {e, Permit, Session, FileRW, FileLU, FileCO, Co a} a ->{e, Session, FileRW, FileLU, FileCO, Co a, Error, State [(Text, [Permission])], IO, Exception} a
+permissions user request =
+    match request with
+        -- Permissions
+        {grant user' perm -> resume} ->
+            checkPermission user Grant !get
+            existingPerms = lookupPermission user' !get
+            newPerms = perm +: existingPerms
+            State.put (modifyPermission user' newPerms !get)
+            handle resume () with permissions user
+
+        {revoke user' perm -> resume} ->
+            checkPermission user Revoke !get
+            newPerms = removePermission perm (lookupPermission user' !get)
+            State.put (modifyPermission user' newPerms !get)
+            handle resume () with permissions user
+
+        -- Users
+        {Session.ask var -> resume} ->
+            checkPermission user Read !get
+            answer = ask var
+            handle resume answer with permissions user
+        {su user' -> resume} ->
+            su user'
+            handle resume () with permissions (Username user')
+        {adduser user' -> resume} ->
+            checkPermission user AddUser !get
+            adduser user'
+            handle resume () with permissions user
+        {setvar var val -> resume} ->
+            checkPermission user Write !get
+            setvar var val
+            handle resume () with permissions user
+
+        -- Files
+        {read i -> resume} ->
+            checkPermission user Read !get
+            text = read i
+            handle resume text with permissions user
+
+        {write (i, text) -> resume} ->
+            checkPermission user Write !get
+            write (i, text)
+            handle resume () with permissions user
+
+        {link (src, dest) -> resume} ->
+            checkPermission user Write !get
+            link (src, dest)
+            handle resume () with permissions user
+
+        {unlink name -> resume} ->
+            checkPermission user Write !get
+            unlink name
+            handle resume () with permissions user
+
+        {create name -> resume} ->
+            checkPermission user Write !get
+            ino = create name
+            handle resume ino with permissions user
+
+        {open name -> resume} ->
+            checkPermission user Read !get
+            ino = open name
+            handle resume ino with permissions user
+
+        {ufork -> resume} ->
+            checkPermission user Execute !get
+            let pid = ufork
+                handle resume pid with permissions user
+
+        {nice pid -> resume} ->
+            checkPermission user Execute !get
+            let nicevalue = nice pid
+                handle resume nicevalue with permissions user
+
+        {renice pid newnice -> resume} ->
+            checkPermission user Execute !get
+            renice pid newnice
+            handle resume () with permissions user
+
+        {Co.wait pid -> resume} ->
+            checkPermission user Execute !get
+            wait pid
+            handle resume () with permissions user
+
+        {uinterrupt -> resume} ->
+            checkPermission user Execute !get
+            uinterrupt
+            handle resume () with permissions user
+
+        {getResult pid -> resume} ->
+            checkPermission user Execute !get
+            let result = getResult pid
+                handle resume result with permissions user
+
+        {result} -> result
+
+lookupPermission: Text -> [(Text, [Permission])] -> [Permission]
+lookupPermission var perms =
+    match perms with
+        [] -> []
+        (var', perms') +: rest ->
+            if var == var' then perms'
+            else lookupPermission var rest
+
+modifyPermission: Text -> [Permission] -> [(Text, [Permission])] -> [(Text, [Permission])]
+modifyPermission var perms perms' =
+    match perms' with
+        [] -> [(var, perms)]
+        (var', perms'') +: rest ->
+            if var == var' then (var, perms) +: rest
+            else (var', perms'') +: modifyPermission var perms rest
+
+removePermission: Permission -> [Permission] -> [Permission]
+removePermission perm perms =
+    match perms with
+        [] -> []
+        perm' +: rest ->
+            if permEquals perm perm' then rest
+            else perm' +: removePermission perm rest
+
+allowed: Permission -> [Permission] -> Boolean
+allowed perm perms =
+    match perms with
+        [] -> false
+        perm' +: rest ->
+            if permEquals perm perm' then true
+            else allowed perm rest
+
+permEquals : Permission -> Permission -> Boolean
+permEquals perms1 perms2 =
+    match perms1 with
+        Permission.Read ->
+            match perms2 with
+                Permission.Read -> true
+                _ -> false
+        Permission.Write ->
+            match perms2 with
+                Permission.Write -> true
+                _ -> false
+        AddUser ->
+            match perms2 with
+                AddUser -> true
+                _ -> false
+        Grant ->
+            match perms2 with
+                Grant -> true
+                _ -> false
+        Revoke ->
+            match perms2 with
+                Revoke -> true
+                _ -> false
+        Execute ->
+            match perms2 with
+                Execute -> true
+                _ -> false
+
+initialPermissions : [(Text, [Permission])]
+initialPermissions = [("root", all)]
+
+
+{-
+    Errors
+-}
+
+unique type EType = PermissionDenied | FileNotFound | FileExists | UserExists | NoSuchUser | UnknownError
+
+toText: EType -> Text
+toText = cases
+    PermissionDenied -> "Permission denied"
+    FileNotFound -> "File not found"
+    FileExists -> "File exists"
+    UserExists -> "User exists"
+    NoSuchUser -> "No such user"
+    UnknownError -> "Unknown error"
+
+unique ability Error
+    where
+        throw: EType -> ()
+
+fail : Request {e, Error} a ->{e, IO, Exception, Status} Empty
+fail request =
+    match request with
+        { Error.throw err -> resume } ->
+            printLine (toText err)
+            exit 1
+        { result } -> exit 0
+
+warn : Request {e, Error} a ->{e, IO, Exception} a
+warn request =
+    match request with
+        { Error.throw err -> resume } ->
+            printLine (toText err)
+            handle resume () with warn
+        { result } -> result
+
+{-
+    Retrofitting fork
+-}
+
+nondet2 : Request {TimeSharing} a -> [a]
+nondet2 request =
+    match request with
+        { fork -> resume } ->
+            let pid = ufork
+                handle resume (pid != 0) with nondet2
+        { result } -> [result]
+
+ {-
+     Unix
+    ======
+-}
+
+unix : '{e, BasicIO, FileRW, FileCO, FileLU, Error, Session, Co a} a ->{e, IO, Exception} [(Nat, Nat)]
+unix m = handle
+            (handle
+                (handle
+                    (handle
+                        (handle
+                        (handle
+                            (handle
+                                (handle
+                                    (handle
+                                        (handle
+                                            (handle
+                                                m
+                                            with env (Username "root"))
+                                        with runState initialUserspace)
+                                    with fileCO)
+                                with fileLU)
+                        with fileRW)
+                    with runState initialFileSystem)
+                    with interruptWrite)
+                with basicIO)
+            with warn)
+        with exitHandler)
+    with scheduler (Sstate [] [] 1 2)
+
+-- unix : '{e, BasicIO, FileRW, FileCO, FileLU, Error, Session, Permit, Co a} a ->{e, IO, Exception} [(Nat, Nat)]
+-- unix m = handle
+--             (handle
+--                 (handle
+--                     (handle
+--                         (handle
+--                         (handle
+--                             (handle
+--                                 (handle
+--                                     (handle
+--                                         (handle
+--                                             (handle
+--                                                 (handle
+--                                                     (handle
+--                                                         init m
+--                                                     with permissions (Username "root"))
+--                                                 with runState initialPermissions)
+--                                             with env (Username "root"))
+--                                         with runState initialUserspace)
+--                                     with fileCO)
+--                                 with fileLU)
+--                         with fileRW)
+--                     with runState initialFileSystem)
+--                     with interruptWrite)
+--                 with basicIO)
+--             with warn)
+--         with exitHandler)
+--     with scheduler (Sstate [] [] 1 2)
+

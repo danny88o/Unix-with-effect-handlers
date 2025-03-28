@@ -8,27 +8,31 @@ import fs
 import benches/helper
 
 pub fun file_mayhem(n: int)
-  var i := 0
-  while{i < n}
-    val name = "file" ++ i.show
-    println(create(name))
-    val inum1 = match open(name) {Just(inum) -> inum}
-    write(inum1, i.show)
+  match n
+    0 -> ()
+    _ ->
+      val n' = n.show
 
-    val middle = "mid"
-    link(name, middle)
-    val inum2 = match open(middle) {Just(inum) -> inum}
-    val txt = match read(inum2) {Just(txt) -> txt}
+      val name = "file" ++ n'
+      create(name)
+      val inum1 = unwrap(open(name))
+      write(inum1, n')
 
-    val other = "final_" ++ i.show
-    create(other)
-    val inum3 = match open(other) {Just(inum) -> inum}
-    write(inum3, txt)
+      val middle = "mid"
+      link(name, middle)
 
-    unlink(middle)
-    unlink(name)
+      val end = "end"
+      create(end)
 
-    i := i + 1
+      val inum2 = unwrap(open(middle))
+      val txt = unwrap(read(inum2))
+      val inum3 = unwrap(open(end))
+      write(inum3, txt)
+
+      unlink(middle)
+      unlink(end)
+
+      file_mayhem(n - 1)
 
 
 fun main()
@@ -37,4 +41,4 @@ fun main()
     with runState(FileSystem())
     with fileIO
     file_mayhem(n)
-  println(fs.dnext)
+  println(fs)
