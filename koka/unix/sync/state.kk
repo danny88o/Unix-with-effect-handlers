@@ -15,35 +15,34 @@ pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> a
     fun put(x)  curr := x
   action()
 
-alias proc<a,e> = () -> <cell<stateS<a,e>>, div|e> ()
+div type proc<a,e>
+  Ready(id:int, p-ready: () -> <cell<stateS<a,e>>, div|e> ())
+  Blocked(id:int, p-blocked:a -> <cell<stateS<a,e>>, div|e> (), waiting-on:int)
 
-div type stateP<a,e>
-  Blocked(pid:int, res:proc<a,e>)
-  Ready(res:proc<a,e>)
-
-struct stateS<a,e> (
-  q    :funcqueue<(int,stateP<a,e>)> = Funcqueue(),
-  done :list<(int,a)>           = [],
-  pid  :int                     =  1,
-  pnext:int                     =  2
+struct stateS<a,e>(
+  q    :funcqueue<proc<a,e>> = Funcqueue(),
+  done :list<(int,a)>        = [],
+  pid  :int                  =  1,
+  pnext:int                  =  2
 )
 
 fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> ()
     match st.q.dequeue()
       Nothing -> put(st)
-      Just(((pid, Blocked(pid',res)), q')) ->
-          if st.done.has(pid') then
-            put(st(q=q', pid=pid))
-            res()
-          else
-            runNext(st(q = q'.enqueue((pid, Blocked(pid',res)))))
-      Just(((pid, Ready(res)), q')) ->
+      Just((Blocked(pid, res, waiting-on), q')) ->
+          match st.done.lookup(fn(key) waiting-on==key)
+            Nothing ->
+              runNext(st(q=q'.enqueue(Blocked(pid, res, waiting-on))))
+            Just(a) ->
+              put(st(q=q', pid=pid))
+              res(a)
+      Just((Ready(pid, res), q')) ->
         put(st(q=q', pid=pid))
         res()
 
 
 fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <div|e> list<(int, a)>
-  fun run(a)
+  fun run(m)
     with handler
       return(x)
         val st = get()
@@ -54,33 +53,27 @@ fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|
         val st = get()
         val child_pid = st.pnext
         val child  = fn() resume(0)
-        val q' = st.q.enqueue((child_pid, Ready(child)))
+        val q' = st.q.enqueue(Ready(child_pid, child))
         put(st(q=q', pnext=child_pid+1))
         resume(child_pid)
 
       ctl wait(pid')
         val st = get()
-        val resume' = fn() resume(())
-        val q' = if st.done.has(pid')
-          then st.q.enqueue((st.pid, Ready(resume')))
-          else st.q.enqueue((st.pid, Blocked(pid', resume')))
+        val p = match st.done.lookup(fn(key) pid'==key)
+          Nothing -> Blocked(pid', fn(a) resume(a), st.pid)
+          Just(a) -> Ready(st.pid, fn() resume(a))
+        val q' = st.q.enqueue(p)
         runNext(st(q=q'))
 
       ctl uInterrupt()
         val st = get()
         val resume' = fn() resume(())
-        val q' = st.q.enqueue((st.pid, Ready(resume')))
+        val q' = st.q.enqueue(Ready(st.pid, resume'))
         runNext(st(q=q'))
-
-      ctl exitStatus(pid)
+      fun getPid()
         val st = get()
-        val status = st.done.lookup(fn(key) pid==key)
-        resume(status)
-
-      ctl getPid()
-        val st = get()
-        resume(st.pid)
-    a()
+        st.pid
+    m()
 
   with runState(init_state)
   run(action)

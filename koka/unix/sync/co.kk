@@ -2,19 +2,11 @@ module sync/co
 
 pub effect co<a>
   ctl uFork(): int
-  ctl wait(pid: int): ()
+  ctl wait(pid: int): a
   ctl uInterrupt(): ()
-  ctl exitStatus(pid:int): maybe<a>
   ctl getPid():int
 
 
-pub fun extractResult(pid:int): <co<a>, div> a
-  match exitStatus(pid)
-    Nothing ->
-      wait(pid)
-      extractResult(pid)
-    Just(res) ->
-      res
 
 
 pub struct funcqueue<a> (

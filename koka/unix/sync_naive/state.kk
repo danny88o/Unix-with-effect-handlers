@@ -1,4 +1,4 @@
-module sync/state
+module sync_naive/state
 
 import basic
 import helper

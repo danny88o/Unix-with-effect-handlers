@@ -4,11 +4,12 @@ import basic
 import helper
 import sync/co
 
-alias proc<a,e,h> = () -> <st<h>, div|e> ()
+alias proc<e,h> = () -> <st<h>, div|e> ()
+alias bproc<a,e,h> = a -> <st<h>, div|e> ()
 
-type stateP<a,e,h>
-  Blocked(pid:int, res:proc<a,e,h>)
-  Ready(res:proc<a,e,h>)
+div type stateP<a,e,h>
+  Ready(res:proc<e,h>)
+  Blocked(pid:int, bres:bproc<a,e,h>)
 
 struct stateS<a,e,h> (
   q    :funcqueue<(int,stateP<a,e,h>)> = Funcqueue(),
@@ -25,10 +26,11 @@ fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <s
     match state.q.dequeue()
       Nothing -> st := state
       Just(((pid, Blocked(pid',res)), q')) ->
-          if state.done.has(pid') then
-            st := state(q=q', pid=pid)
-            res()
-          else runNext(state(q = q'.enqueue((pid, Blocked(pid',res)))))
+          match state.done.lookup(fn(key) pid==key)
+            Nothing -> runNext(state(q = q'.enqueue((pid, Blocked(pid',res)))))
+            Just(a) ->
+              st := state(q=q', pid=pid)
+              res(a)
       Just(((pid, Ready(res)), q')) ->
         st := state(q=q', pid=pid)
         res()
@@ -47,23 +49,19 @@ fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <s
         resume(child_pid)
 
       ctl wait(pid')
-        val resume' = fn() resume(())
-        val q' = if (!st).done.has(pid')
-          then (!st).q.enqueue(((!st).pid, Ready(resume')))
-          else (!st).q.enqueue(((!st).pid, Blocked(pid', resume')))
-        runNext((!st)(q=q'))
+        val p = match (!st).done.lookup(fn(key) pid'==key)
+          Nothing -> Blocked(pid', fn(a) resume(a))
+          Just(a) -> Ready(fn() resume(a))
+        val q' = (!st).q.enqueue(((!st).pid, p))
+        st := (!st)(q=q')
 
       ctl uInterrupt()
         val resume' = fn() resume(())
         val q' = (!st).q.enqueue(((!st).pid, Ready(resume')))
         runNext((!st)(q=q'))
 
-      ctl exitStatus(pid)
-        val status = (!st).done.lookup(fn(key) pid==key)
-        resume(status)
-
-      ctl getPid()
-        resume((!st).pid)
+      fun getPid()
+        (!st).pid
 
     action()
 

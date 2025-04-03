@@ -81,13 +81,11 @@ Stream Redirection
 */
 
 pub fun (>)(action: () -> <basicIO/write, create, exit|e> a, fname: string): <basicIO/write,create,exit|e> a
-  val maybe-ino = create(fname)
-
   with override fun write(fileDesc, fileContent)
-    match maybe-ino
+    if fileDesc == 0 then match create(fname)
         Nothing   -> exit(1)
         Just(ino) -> basicIO/write(ino, fileContent)
-
+    else basicIO/write(fileDesc, fileContent)
   action()
 
 
@@ -144,3 +142,9 @@ pub fun rm(fname:string): unlink ()
 //         val fs = get()
 //         put(fs.funlink(fname))
 //   action()
+
+// fun main()
+//   fun rr()
+//     echo("42")
+//   val f = "test.txt"
+//   rr > f

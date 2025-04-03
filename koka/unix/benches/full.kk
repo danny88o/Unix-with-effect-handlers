@@ -14,7 +14,7 @@ fun memoize(file, result: int)
   switchUser(Alice)
 
 pub fun fib_memo(n: int)
-  val file: string = "fib" ++ n.show ++ ".txt"
+  val file: string = n.show
   match open(file)
     Nothing ->
       match n
@@ -54,8 +54,6 @@ fun main()
       val pid = uFork()
       if pid == 0
       then fib_memo(i)
-      else
-        wait(pid)
+      else wait(pid)
       i := i + 1
-    ()
   ()

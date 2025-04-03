@@ -1,20 +1,21 @@
-module sync/ref
+module sync_naive/ref
 
 import basic
 import helper
-pub import sync/co
+pub import sync_naive/co
 
-alias proc<a,e,h> = () -> <st<h>, div|e> ()
+alias proc<e,h> = () -> <st<h>, div|e> ()
+alias bproc<a,e,h> = a -> <st<h>, div|e> ()
 
-type stateP<a,e,h>
-  Blocked(pid:int, res:proc<a,e,h>)
-  Ready(res:proc<a,e,h>)
+div type stateP<a,e,h>
+  Ready(res:proc<e,h>)
+  Blocked(pid:int, bres:bproc<a,e,h>)
 
 struct stateS<a,e,h> (
   q    :list<(int,stateP<a,e,h>)> = [],
-  done :list<(int,a)>           = [],
-  pid  :int                     =  1,
-  pnext:int                     =  2
+  done :list<(int,a)>             = [],
+  pid  :int                       =  1,
+  pnext:int                       =  2
 )
 
 
@@ -25,10 +26,11 @@ fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <s
     match state.q
       Nil -> st := state
       Cons((pid, Blocked(pid',res)), q') ->
-          if state.done.has(pid') then
-            st := state(q=q', pid=pid)
-            res()
-          else runNext(state(q = q'++[(pid, Blocked(pid',res))])) // Push to back of queue
+          match state.done.lookup(fn(key) pid==key)
+            Nothing -> runNext(state(q = q'++[(pid, Blocked(pid',res))]))
+            Just(a) ->
+              st := state(q=q', pid=pid)
+              res(a)
       Cons((pid, Ready(res)), q') ->
         st := state(q=q', pid=pid)
         res()
@@ -47,20 +49,17 @@ fun sched(init_state: stateS<a,e,h>, action: () -> <co<a>, st<h>, div|e> a):  <s
         resume(child_pid)
 
       ctl wait(pid')
-        val resume' = fn() resume(())
-        val q' = if (!st).q.has(pid')
-          then (!st).q ++ [((!st).pid, Blocked(pid', resume'))]
-          else (!st).q ++ [((!st).pid, Ready(resume'))]
+        val p = match (!st).done.lookup(fn(key) pid'==key)
+          Nothing -> Blocked(pid', fn(a) resume(a))
+          Just(a) -> Ready(fn() resume(a))
+        val q' = (!st).q ++ [((!st).pid, p)]
+        st := (!st)(q=q')
         runNext((!st)(q=q'))
 
       ctl uInterrupt()
         val resume' = fn() resume(())
         val q' = (!st).q ++ [((!st).pid, Ready(resume'))]
         runNext((!st)(q=q'))
-
-      ctl exitStatus(pid)
-        val status = (!st).done.lookup(fn(key) pid==key)
-        resume(status)
 
       ctl getPid()
         resume((!st).pid)

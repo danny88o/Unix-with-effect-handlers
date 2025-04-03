@@ -1,20 +1,19 @@
-module sync/co
+module sync_naive/co
 
 pub effect co<a>
   ctl uFork(): int
-  ctl wait(pid: int): ()
+  ctl wait(pid: int): a
   ctl uInterrupt(): ()
-  ctl exitStatus(pid:int): maybe<a>
   ctl getPid():int
 
 
-pub fun extractResult(pid:int): <co<a>, div> a
-  match exitStatus(pid)
-    Nothing ->
-      wait(pid)
-      extractResult(pid)
-    Just(res) -> 
-      res
+// pub fun extractResult(pid:int): <co<a>, div> a
+//   match exitStatus(pid)
+//     Nothing ->
+//       wait(pid)
+//       extractResult(pid)
+//     Just(res) ->
+//       res
 
 pub effect cell<a>
   fun get(): a
@@ -25,7 +24,7 @@ pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> a
   with handler
     fun get()   curr
     fun put(x)  curr := x
-  action() 
+  action()
 
 // pub alias queue<a> = list<(int,a)>
 

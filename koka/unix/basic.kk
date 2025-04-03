@@ -45,7 +45,7 @@ pub fun schedule(jobs: list<pState<a,<fork, div|e>>>): <div|e> list<a>
   fun sched(ps: list<pState<a,<fork,div|e>>>, done: list<a>): <div|e> list<a>
     match ps
       Nil -> done
-      Cons(Done(ret),xs) -> sched(xs, done ++ [ret])
+      Cons(Done(ret), xs) -> sched(xs, done ++ [ret])
       Cons(Paused(action), xs) -> sched(xs ++ nondet(action), done)
   sched(jobs, [])
 
