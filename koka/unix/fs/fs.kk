@@ -88,6 +88,13 @@ pub fun (>)(action: () -> <basicIO/write, create, exit|e> a, fname: string): <ba
     else basicIO/write(fileDesc, fileContent)
   action()
 
+pub fun (>=)(action: () -> <basicIO/write, open, exit, create|e> a, fname: string): <basicIO/write,open, create, exit|e> a
+  with override fun write(fileDesc, fileContent)
+    if fileDesc == 0 then match open(fname)
+        Nothing   -> (fn() basicIO/write(0, fileContent)) > fname
+        Just(ino) -> basicIO/write(ino, fileContent)
+    else basicIO/write(fileDesc, fileContent)
+  action()
 
 /*
 --------------------------

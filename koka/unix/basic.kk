@@ -54,8 +54,9 @@ pub fun timeshare(action: () -> <fork,interrupt,div|e> a): <div|e> list<a>
 
 pub fun interruptWrite(action: () -> <interrupt, basicIO/write|e> a): <interrupt, basicIO/write|e> a
   with override fun write(fd,s)
-    interrupt()
     write(fd,s)
+    interrupt()
+
 
   action()
 
