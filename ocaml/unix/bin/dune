@@ -1,0 +1,25 @@
+(executable
+ (public_name unix)
+ (name main)
+ (libraries unix))
+
+(executable
+ (public_name unix)
+ (name fs_bench)
+ (libraries unix))
+(executable
+ (public_name unix)
+ (name pipe_bench)
+ (libraries unix))
+(executable
+ (public_name unix)
+ (name sched_bench)
+ (libraries unix))
+(executable
+ (public_name unix)
+ (name session1_bench)
+ (libraries unix))
+(executable
+ (public_name unix)
+ (name session2_bench)
+ (libraries unix))

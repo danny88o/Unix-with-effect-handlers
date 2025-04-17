@@ -1,7 +1,3 @@
-.koka
-.venv
-**/csv/
-
 *.annot
 *.cmo
 *.cma
@@ -31,4 +27,3 @@ setup.log
 
 # Local OPAM switch
 _opam/
-.vscode/settings.json
