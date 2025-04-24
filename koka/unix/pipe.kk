@@ -11,6 +11,8 @@ piper
 -----------------------------------------------------------------
 */
 
+val eof = "\x00"
+
 pub effect await<b>
   ctl await(): b
 pub effect yield<b>
@@ -30,13 +32,13 @@ pub fun(||)(
   p: () -> <yield<b>, yield<string>, basicIO/write,  div|e> a,
   c: () -> <await<b>, yield<string>, basicIO/write,  div|e> a
   ): (() -> <basicIO/write,  div|e> a)
-  fn()
-    with fun yield(s)
-      match s
-        "0" -> ()
-        _   -> echo(s)
+  fn() {
+    var str := ""
+    with handler
+      fun yield(s)
+        if s == eof then echo(str) else str := str ++ s
     pipe(p,c)
-
+  }
 
 /*
 ------------------------------------------------------------------
@@ -51,33 +53,34 @@ pub fun cat(fname: string): <open, fs/fs/read, yield<char>, exit> ()
       Nothing  -> exit(1)
       Just(cs) ->
         cs.iter(yield)
-        yield('0')
+        yield('\x00')
 
 
 pub fun head(n:int): <await<char>, yield<char>, div> ()
-  if n == 0 then yield('0')
+  if n == 0 then yield('\x00')
   else
     val c = await()
     yield(c)
     match c
-      '0'  -> ()
+      '\x00'  -> ()
       '\n' -> head(n - 1)
       _    -> head(n)
 
 
-pub fun paste(): <yield<string>, await<char>, div> ()
+pub fun paste(): <await<char>, yield<string>, div> ()
   fun pst(c:char, cs:string): <yield<string>, await<char>, div> ()
     match c
-      '0'  ->
+      '\x00'  ->
         yield(cs)
-        yield("0")
+        yield(eof)
       '\n' ->
         yield(cs)
         yield("\n")
-        pst(await(), " ")
+        pst(await(), "")
       ' ' ->
         yield(cs)
-        pst(await(), " ")
+        yield(" ")
+        pst(await(), "")
       c ->
         pst(await(), cs ++ c.string)
   pst(await(), "")
@@ -88,32 +91,85 @@ pub fun sed(target: string, str':string): <await<string>, yield<string>, div> ()
   if str == target then yield(str') else yield(str)
   sed(target, str')
 
+alias table = list<(string, int)>
 
-pub fun freq(): <await<string>, yield<list<(string, int)>>, div> ()
-  fun freq'(str:string, tbl: list<(string, int)>): <await<string>, yield<list<(string, int)>>, div> ()
-    match str
-      "0" -> yield(tbl)
-      str ->
-        val tbl' =
-          with withDefault([(str,1)] ++ tbl)
-          val sum = tbl.lookup-fail(str)
-          tbl.modify(str, sum + 1)
-        freq'(await(), tbl')
-  freq'(await(), [])
-
-
-pub fun renderTable(): <await<list<(string, int)>>, yield<string>|e> ()
-  fun renderRow(tuple: (string, int)): string
+fun table/show(tbl: table): string
+  fun showRow(tuple: (string, int)): string
     val (s,i) = tuple
     s ++ ":" ++ i.show ++ ";"
+  tbl.map(showRow).join
 
-  val tbl: list<(string, int)> = await()
-  yield(tbl.map(renderRow).join)
+pub fun freq(): <await<string>, yield<string>, div> ()
+  fun freq'(str:string, tbl: table)
+    if str == eof then
+      yield(tbl.show)
+      yield(eof)
+    else
+      val tbl' =
+        with withDefault([(str,1)] ++ tbl)
+        val sum = tbl.lookup-fail(str)
+        tbl.modify(str, sum + 1)
+      freq'(await(), tbl')
+  freq'(await(), [])
+
+pub fun rle(): <await<string>, yield<string>, div> ()
+  fun rle'(input:string, curr:string, count:int): <await<string>, yield<string>, div> ()
+    if input == eof then
+      yield(count.show ++ "," ++ curr)
+      yield(eof)
+    elif curr == "" then
+      rle'(await(), input, count)
+    elif input == " " then
+      rle'(await(), curr, count)
+    elif input == curr then
+      rle'(await(), curr, count + 1)
+    else
+      yield((count.show ++ "," ++ curr ++ " "))
+      rle'(await(), input, 1)
+  rle'(await(), "", 1)
+
+pub fun unrle()
+  fun unrle'(input:string)
+    if input == eof then yield(eof)
+    else
+      val (n, str) = match input.split(",")
+        Cons(n, Cons(str, Nil)) -> (n, str)
+        Cons(n, Nil) -> (n, " ")
+        _ -> ("1", input)
+      match parse-int(n)
+        Nothing -> yield(input)
+        Just(n') -> yield(replicate(str, n').list/joinsep/join(" "))
+    unrle'(await())
+  unrle'(await())
+
+
+
+pub fun ceaser(n:int)
+  fun ceaser'(input:char)
+    match input
+     '\x00' -> yield('\x00')
+     ' ' ->
+      yield(' ')
+      ceaser'(await())
+     _   ->
+      yield(char((input.int+n)%256))
+      ceaser'(await())
+  ceaser'(await())
+
+pub fun hash(modulus:int)
+  val base = 256
+  fun hash'(c:char, value:int)
+    if c == '\x00' then
+      yield(value.show)
+      yield(eof)
+    else
+      hash'(await(), (value * base + c.int) % modulus)
+  hash'(await(), 0)
 
 pub fun stdpipeout(action: () -> <yield<char>, basicIO/write|e> a): <basicIO/write|e> a
   with handler raw ctl yield(c:char)
     match c
-      '0' -> rcontext.resume(())
+      '\x00' -> rcontext.resume(())
       c   -> rcontext.resume(echo(c.string))
   action()
 
@@ -121,9 +177,8 @@ fun main()
   with runState(Filesystem())
   with fileIO
   with status
-  with stdpipeout
-  (fn() echo("Hello World \n 88o")) > "hello.txt"
-  ((fn () cat("hello.txt")) || (fn() head(1)) || paste) >= "pls.txt"
+  (fn() echo("red red red green green green purple")) > "pic"
+  ((fn() cat("pic")) || (fn() ceaser(1)) || paste || rle) > "pic.enc.rle"
+  ((fn() cat("pic.enc.rle")) || paste || unrle) > "pic.enc"
+  ((fn() cat("pic.enc")) || (fn() ceaser(-1)) || paste) >= "pic2"
 
-  (fn() echo("Goodby Friend")) > "bye.txt"
-  (fn() cat("bye.txt")) > "carp.txt"

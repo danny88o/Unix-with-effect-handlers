@@ -19,6 +19,8 @@ pub effect fileIO
   fun link(src: string, dest: string): ()
   fun unlink(fname: string): ()
 
+pub fun echo(cs:string)
+  write(0,cs)
 
 pub fun fileIO(action: () -> <cell<fileSystem>,fileIO|e> a): <cell<fileSystem>|e> a
   with handler
@@ -54,12 +56,12 @@ Stream Redirection
 */
 
 pub fun (>)(action: () -> <fileIO, exit|e> a, fname: string): <fileIO,exit|e> a
-  val maybe-ino = create(fname)
   with handler override
     fun write(fileDesc, fileContent)
-      match maybe-ino
+      if fileDesc == 0 then match create(fname)
           Nothing   -> exit(1)
           Just(ino) -> write(ino, fileContent)
+      else write(fileDesc, fileContent)
     fun read(ino)
       read(ino)
     fun create(fname_)
@@ -70,9 +72,26 @@ pub fun (>)(action: () -> <fileIO, exit|e> a, fname: string): <fileIO,exit|e> a
       link(src, dest)
     fun unlink(fname_)
       unlink(fname_)
-
   action()
 
+pub fun (>=)(action: () -> <fileIO, exit|e> a, fname: string): <fileIO,exit|e> a
+  with handler override
+    fun write(fileDesc, fileContent)
+      if fileDesc == 0 then match open(fname)
+          Nothing   -> (fn() write(0, fileContent)) > fname
+          Just(ino) -> write(ino, fileContent ++ "\n")
+      else write(fileDesc, fileContent)
+    fun read(ino)
+      read(ino)
+    fun create(fname_)
+      create(fname_)
+    fun open(fname_)
+      open(fname_)
+    fun link(src, dest)
+      link(src, dest)
+    fun unlink(fname_)
+      unlink(fname_)
+  action()
 
 pub fun cp(do-link: bool, src:string, dest:string): <fileIO, exit> ()
   if do-link then link(src,dest)
@@ -80,7 +99,7 @@ pub fun cp(do-link: bool, src:string, dest:string): <fileIO, exit> ()
     Nothing   -> exit(1)
     Just(ino) -> match read(ino)
         Nothing -> exit(1)
-        Just(cs) -> (fn() {write(1, cs)}) > dest
+        Just(cs) -> (fn() {write(0, cs)}) > dest
 
 pub fun rm(fname:string): fileIO ()
   unlink(fname)

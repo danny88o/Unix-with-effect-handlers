@@ -1,59 +1,53 @@
 module benches/full
 
-import benches/helper
+import benches/bhelper
 
 import fs
 import basic
 import basicIO
 import sync
+import pipe
+import helper
 
-fun memoize(file, result: int)
-  switchUser(Root)
-  create(file)
-  (fn() echo(result.show)) > file
+fun crack_ceaser(x)
+  fun crack_ceaser'(i:int, children:list<int>)
+    val pid = uFork()
+    if pid == 0 then
+      ((fn() cat("image.enc")) || (fn() ceaser(i)) ||  (fn() head(2)) || paste) > (i.show ++ "-image.png")
+      exit(0)
+    else
+      if i == 0 then children.iter(wait) else crack_ceaser'(i - 1, Cons(pid, children))
+  crack_ceaser'(x, [])
+
+
+fun full(n:int)
+
   switchUser(Alice)
+  (fn() echo("FF FF FF FF FF FF 00 00 00\n FF FF FF FF FF FF 00 00 00\n FF FF FF FF FF FF 00 00 00")) > "image.png"
+  ((fn() cat("image.png")) || (fn() ceaser(0-n)) || paste || rle) > "image.enc.rle"
+  ((fn() cat("image.enc.rle")) || (fn() hash(379))) > "image.hash"
+  // rm("image.png")
 
-pub fun fib_memo(n: int)
-  val file: string = n.show
-  match open(file)
-    Nothing ->
-      match n
-        0 ->
-          memoize(file, 0)
-          exit(0)
+  switchUser(Bob)
+  ((fn() cat("image.enc.rle")) || paste || unrle) > "image.enc"
+  if !fork() then crack_ceaser(n)
+  (fn() echo("FF FF FF AA AA AA 00 00 00")) >= (n.show ++ "-image.png")
+  ((fn() cat(n.show ++ "-image.png")) || (fn() ceaser(0-n)) || paste || rle) > "image.enc.rle"
 
-        1 ->
-          memoize(file, 1)
-          exit(1)
-        _ ->
-          val pid1 = uFork()
-          if pid1 == 0 then fib_memo(n - 1)
-          else
-            val pid2 = uFork()
-            if pid2 == 0 then fib_memo(n - 2)
-            else
-              uInterrupt()
-              val result:int = extractResult(pid2) + extractResult(pid1)
-              memoize(file, result)
-              exit(result)
-
-    Just(ino) ->
-      exit(read(ino).unwrap().parse-int().unwrap())
-
+  switchUser(Alice)
+  ((fn() cat("image.enc.rle")) || (fn() hash(379))) > "image-check.hash"
+  (fn() echo("BOB!!"))
 
 fun main()
-  val _ =
-    with fs/storage/runState(FileSystem())
+
+  // val _ =
+    val n = get-arg(10)
+    with runState(FileSystem())
     with fileIO
     with sessionmgr2(Root)
     with timeshare2
+    with retro-sync
+    with interruptWrite
     with status
-    val n = get-arg(2000)
-    var i := 0
-    while{ i < n }
-      val pid = uFork()
-      if pid == 0
-      then fib_memo(i)
-      else wait(pid)
-      i := i + 1
-  ()
+    full(n)
+  // ()

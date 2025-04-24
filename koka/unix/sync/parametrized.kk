@@ -4,6 +4,23 @@ import basic
 import helper
 import sync/co
 
+pub type funcqueue<a>
+  Funcqueue(
+    enter: list<a> = [],
+    out: list<a> = []
+  )
+
+pub fun enqueue<a>(q:funcqueue<a>, x:a): funcqueue<a>
+  match q
+    Funcqueue(in_q, out_q) -> Funcqueue(Cons(x,in_q), out_q)
+
+
+pub fun dequeue<a>(q:funcqueue<a>): div maybe<(a, funcqueue<a>)>
+  match q
+    Funcqueue(Nil, Nil) -> Nothing
+    Funcqueue(in_q, Nil) -> dequeue(Funcqueue(Nil, in_q.reverse()))
+    Funcqueue(in_q, Cons(x, xs)) -> Just((x, Funcqueue(in_q, xs)))
+
 div type stateP<a,e>
   Ready(
     id:int,
@@ -41,23 +58,21 @@ fun sched(state:stateS<a,<div|e>>, action:() -> <co<a>,div|e> a): <div|e> list<(
         }
       ctl uFork()
         fn(st){
-          val resume' = fn(st') resume(0)(st')
-          val pid = st.pnext
-          val q' = st.q.enqueue(Ready(pid, resume'))
-          resume(pid)(st(q=q', pnext=pid+1))
+          val child_pid = st.pnext
+          val p = Ready(child_pid, fn(st') resume(0)(st'))
+          val q' = st.q.enqueue(p)
+          resume(child_pid)(st(q=q', pnext=child_pid+1))
         }
       ctl wait(pid')
         fn(st){
-          val p = match st.done.lookup(fn(key) pid'==key)
-            Nothing -> Blocked(st.pid, fn(st', a) resume(a)(st'), pid' )
-            Just(a) -> Ready(st.pid, fn(st') resume(a)(st))
+          val p = Blocked(st.pid, fn(st', a) resume(a)(st'), pid' )
           val q' = st.q.enqueue(p)
           runNext(st(q=q'))
         }
       ctl uInterrupt()
         fn(st){
-          val resume' = fn(st') resume(())(st')
-          val q' = st.q.enqueue(Ready(st.pid, resume'))
+          val p = Ready(st.pid, fn(st') resume(())(st'))
+          val q' = st.q.enqueue(p)
           runNext(st(q=q'))
         }
       ctl getPid()
@@ -67,15 +82,6 @@ fun sched(state:stateS<a,<div|e>>, action:() -> <co<a>,div|e> a): <div|e> list<(
     action()
   res(state)
 
-
-pub fun init(main: () -> <co<a>|e> ()): <co<a>|e> ()
-  val pid = uFork()
-  if pid == 0
-  then
-    main()
-  else
-    wait(pid)
-    ()
 
 pub fun timeshare2(action: () -> <co<a>,div|e> a): <div|e> list<(int,a)>
   with sched(StateS())

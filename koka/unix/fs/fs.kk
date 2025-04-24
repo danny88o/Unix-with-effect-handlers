@@ -92,7 +92,7 @@ pub fun (>=)(action: () -> <basicIO/write, open, exit, create|e> a, fname: strin
   with override fun write(fileDesc, fileContent)
     if fileDesc == 0 then match open(fname)
         Nothing   -> (fn() basicIO/write(0, fileContent)) > fname
-        Just(ino) -> basicIO/write(ino, fileContent)
+        Just(ino) -> basicIO/write(ino, fileContent ++"\n")
     else basicIO/write(fileDesc, fileContent)
   action()
 
@@ -121,37 +121,3 @@ pub fun cp(do-link: bool, src:string, dest:string): <basicIO/write, read, open, 
 
 pub fun rm(fname:string): unlink ()
   unlink(fname)
-
-// pub fun compactFileIO(action: () -> <fileIO, cell<fileSystem>|e> a): <cell<fileSystem>|e> a
-//   with fun read(ino)
-//       with withDefault(Nothing)
-//       val fs = get()
-//       Just(fs.fread(ino))
-//   with fun write(ino, cs)
-//       with withDefault(())
-//       val fs = get()
-//       put(fs.fwrite(ino, cs))
-//   with fun create(fname)
-//       with withDefault(Nothing)
-//       val (ino, fs) = get().fcreate(fname)
-//       put(fs)
-//       Just(ino)
-//   with fun open(fname)
-//       with withDefault(Nothing)
-//       val fs = get()
-//       Just(fs.fopen(fname))
-//   with fun link(src, dest)
-//         with withDefault(())
-//         val fs = get()
-//         put(fs.flink(src, dest))
-//   with fun unlink(fname)
-//         with withDefault(())
-//         val fs = get()
-//         put(fs.funlink(fname))
-//   action()
-
-// fun main()
-//   fun rr()
-//     echo("42")
-//   val f = "test.txt"
-//   rr > f

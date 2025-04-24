@@ -1,26 +1,45 @@
 module sync/co
 
+import basic
+
 pub effect co<a>
   ctl uFork(): int
   ctl wait(pid: int): a
   ctl uInterrupt(): ()
   ctl getPid():int
 
+pub fun retro-sync(action: () -> <interrupt, fork, co<a>| e> a): <co<a>|e> a
+  with fun fork() uFork() > 0
+  with fun interrupt() uInterrupt()
+  action()
+
+
+pub fun init(main: () -> <co<a>|e> ()): <co<a>|e> ()
+  val pid = uFork()
+  if pid == 0
+  then
+    main()
+  else
+    wait(pid)
+    ()
 
 
 
-pub struct funcqueue<a> (
-  enter: list<a> = [],
-  out: list<a> = []
-)
+// pub alias funcqueue<a> = (list<a>, list<a>)
 
-pub fun enqueue<a>(q:funcqueue<a>, x:a): funcqueue<a>
-  q(enter = Cons(x, q.enter))
-
-pub fun dequeue<a>(q:funcqueue<a>): div maybe<(a, funcqueue<a>)>
-  match q
-    Funcqueue(Nil, Nil) -> Nothing
-    Funcqueue(in_q, Nil) -> dequeue(Funcqueue(Nil, in_q.reverse()))
-    Funcqueue(in_q, Cons(x, xs)) -> Just((x, Funcqueue(in_q, xs)))
+// pub fip(1) fun enqueue(q:funcqueue<a>, x:a): funcqueue<a>
+//   match q
+//     (in_q, out_q) -> (Cons(x,in_q), out_q)
 
 
+// pub fbip fun dequeue(q:funcqueue<a>): div maybe<(a, funcqueue<a>)>
+//   match q
+//     (Nil, Nil) -> Nothing
+//     (in_q, Nil) -> dequeue((Nil, in_q.reverse()))
+//     (in_q, Cons(x, xs)) -> Just((x, (in_q, xs)))
+
+// pub fip fun to-back(q:funcqueue<a>): div funcqueue<a>
+//   match q
+//     (Nil, Nil) -> (Nil, Nil)
+//     (in_q, Nil) -> to-back((Nil, in_q.reverse()))
+//     (in_q, Cons(x, xs)) -> (Cons(x, in_q), xs)

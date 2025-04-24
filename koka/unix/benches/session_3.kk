@@ -1,9 +1,11 @@
 module benches/session_3
 
-import benches/helper
+import benches/bhelper
 import basic
+import unix
 
 fun main()
   val n = get-arg(1000)
-  with sessionmgr3(Root)
+  with discard
+  with unix_sm3
   chainSwitch(n)

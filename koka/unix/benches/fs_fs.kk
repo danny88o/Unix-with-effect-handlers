@@ -1,44 +1,33 @@
 module benches/fs_fs
 
-import fs/storage
-import benches/hamlet
 
-import fs
-
-import benches/helper
+import benches/bhelper
+import unix
 
 pub fun file_mayhem(n: int)
   match n
     0 -> ()
     _ ->
       val n' = n.show
+      (fn() echo(n')) >= "countdown"
+      // (fn() echo("\n")) >= "countdown"
 
-      val name = "file" ++ n'
-      create(name)
-      val inum1 = unwrap(open(name))
-      write(inum1, n')
+      (fn() echo(n')) > "temp"
+      cp(True, "temp", "mid")
+      cp(False, "mid", n')
 
-      val middle = "mid"
-      link(name, middle)
-
-      val end = "end"
-      create(end)
-
-      val inum2 = unwrap(open(middle))
-      val txt = unwrap(read(inum2))
-      val inum3 = unwrap(open(end))
-      write(inum3, txt)
-
-      unlink(middle)
-      unlink(end)
+      rm("temp")
+      rm("mid")
 
       file_mayhem(n - 1)
 
 
 fun main()
-  val n = get-arg(1000)
-  val (fs, _) =
-    with runState(FileSystem())
-    with fileIO
-    file_mayhem(n)
-  println(fs)
+  val n = get-arg(2)
+  with discard
+  with runState(FileSystem())
+  with fileIO
+  with status
+  (fn() echo("")) > "countdown"
+  file_mayhem(n)
+

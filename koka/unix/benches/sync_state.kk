@@ -1,11 +1,11 @@
 module benches/sync_state
 
-import benches/helper
+import benches/bhelper
 
-import sync/state
+import unix
 
 fun main()
   val n = get-arg()
-  with getPid1
-  with timeshare3
+  with discard
+  with unix_ts3
   fib(n)

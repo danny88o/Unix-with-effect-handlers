@@ -4,20 +4,26 @@ import basic
 import helper
 import sync/co
 
-pub effect cell<a>
-  fun get(): a
-  fun put(a:a): ()
+pub type funcqueue<a>
+  Funcqueue(
+    enter: list<a> = [],
+    out: list<a> = []
+  )
 
-pub fun runState(init:b, action: () -> <div, cell<b>|e> a): <div|e> a
-  var curr := init
-  with handler
-    fun get()   curr
-    fun put(x)  curr := x
-  action()
+pub fun enqueue<a>(q:funcqueue<a>, x:a): funcqueue<a>
+  match q
+    Funcqueue(in_q, out_q) -> Funcqueue(Cons(x,in_q), out_q)
+
+
+pub fun dequeue<a>(q:funcqueue<a>): div maybe<(a, funcqueue<a>)>
+  match q
+    Funcqueue(Nil, Nil) -> Nothing
+    Funcqueue(in_q, Nil) -> dequeue(Funcqueue(Nil, in_q.reverse()))
+    Funcqueue(in_q, Cons(x, xs)) -> Just((x, Funcqueue(in_q, xs)))
 
 div type proc<a,e>
-  Ready(id:int, p-ready: () -> <cell<stateS<a,e>>, div|e> ())
-  Blocked(id:int, p-blocked:a -> <cell<stateS<a,e>>, div|e> (), waiting-on:int)
+  Ready(id:int, p-ready: () -> <cell<stateS<a,e>>, div|e> list<(int, a)>)
+  Blocked(id:int, p-blocked: a -> <cell<stateS<a,e>>, div|e> list<(int, a)>, waiting-on:int)
 
 struct stateS<a,e>(
   q    :funcqueue<proc<a,e>> = Funcqueue(),
@@ -26,9 +32,9 @@ struct stateS<a,e>(
   pnext:int                  =  2
 )
 
-fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> ()
+fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> list<(int, a)>
     match st.q.dequeue()
-      Nothing -> put(st)
+      Nothing -> st.done
       Just((Blocked(pid, res, waiting-on), q')) ->
           match st.done.lookup(fn(key) waiting-on==key)
             Nothing ->
@@ -40,45 +46,41 @@ fun runNext(st:stateS<a,e>): <cell<stateS<a,e>>, div|e> ()
         put(st(q=q', pid=pid))
         res()
 
+fun sched(action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <cell<stateS<a,e>>, div|e> list<(int, a)>
+  with handler
+    return(x)
+      val st = get()
+      val done' = Cons((st.pid, x), st.done)
+      runNext(st(done=done'))
 
-fun sched(init_state: stateS<a,e>, action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <div|e> list<(int, a)>
-  fun run(m)
-    with handler
-      return(x)
-        val st = get()
-        val done' = Cons((st.pid, x), st.done)
-        runNext(st(done=done'))
+    ctl uFork()
+      val st = get()
+      val child_pid = st.pnext
+      val p = Ready(child_pid, fn() resume(0))
+      val q' = st.q.enqueue(p)
+      put(st(q=q', pnext=child_pid+1))
+      resume(child_pid)
 
-      ctl uFork()
-        val st = get()
-        val child_pid = st.pnext
-        val child  = fn() resume(0)
-        val q' = st.q.enqueue(Ready(child_pid, child))
-        put(st(q=q', pnext=child_pid+1))
-        resume(child_pid)
+    ctl wait(pid')
+      val st = get()
+      val p = Blocked(st.pid, fn(a) resume(a), pid')
+      val q' = st.q.enqueue(p)
+      runNext(st(q=q'))
 
-      ctl wait(pid')
-        val st = get()
-        val p = match st.done.lookup(fn(key) pid'==key)
-          Nothing -> Blocked(pid', fn(a) resume(a), st.pid)
-          Just(a) -> Ready(st.pid, fn() resume(a))
-        val q' = st.q.enqueue(p)
-        runNext(st(q=q'))
+    ctl uInterrupt()
+      val st = get()
+      val p = Ready(st.pid, fn() resume(()))
+      val q' = st.q.enqueue(p)
+      runNext(st(q=q'))
 
-      ctl uInterrupt()
-        val st = get()
-        val resume' = fn() resume(())
-        val q' = st.q.enqueue(Ready(st.pid, resume'))
-        runNext(st(q=q'))
-      fun getPid()
-        val st = get()
-        st.pid
-    m()
-
-  with runState(init_state)
-  run(action)
-  get().done
+    fun getPid()
+      val st = get()
+      st.pid
+  action()
 
 pub fun timeshare3(action: () -> <co<a>, cell<stateS<a,e>>, div|e> a): <div|e> list<(int, a)>
-  with sched(StateS())
-  action()
+  val (_, done) =
+    with runState(StateS())
+    with sched
+    action()
+  done
